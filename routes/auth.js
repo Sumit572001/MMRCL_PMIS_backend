@@ -20,6 +20,7 @@ const sendTokenResponse = (user, statusCode, res) => {
       id: user._id,
       name: user.name,
       email: user.email,
+      userId: user.userId,
       role: user.role,
       organization: user.organization
     }
@@ -31,7 +32,7 @@ const sendTokenResponse = (user, statusCode, res) => {
 // @access  Public
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, role, organization } = req.body;
+    const { name, email, userId, password, role, organization } = req.body;
 
     // Check if user exists
     const userExists = await User.findOne({ email });
@@ -43,6 +44,7 @@ router.post('/register', async (req, res) => {
     const user = await User.create({
       name,
       email,
+      userId,
       password,
       role,
       organization
@@ -59,15 +61,25 @@ router.post('/register', async (req, res) => {
 // @access  Public
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const loginId = req.body.email || req.body.userId || req.body.id || req.body.loginId;
+    const { password } = req.body;
 
-    // Validate email & password
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Please provide an email and password' });
+    // Validate login ID & password
+    if (!loginId || !password) {
+      return res.status(400).json({ success: false, message: 'Please provide User ID / Email and password' });
     }
 
-    // Check for user
-    const user = await User.findOne({ email }).select('+password');
+    const cleanId = String(loginId).trim();
+
+    // Check for user matching email, userId, or name
+    const user = await User.findOne({
+      $or: [
+        { email: new RegExp('^' + cleanId + '$', 'i') },
+        { userId: new RegExp('^' + cleanId + '$', 'i') },
+        { name: new RegExp('^' + cleanId + '$', 'i') }
+      ]
+    }).select('+password');
+
     if (!user) {
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
@@ -96,6 +108,7 @@ router.get('/me', protect, async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        userId: user.userId,
         role: user.role,
         organization: user.organization
       }

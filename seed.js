@@ -162,7 +162,32 @@ const submittalsData = [
 
 const usersData = [
   {
+    name: 'NECPL',
+    userId: 'NECPL',
+    email: 'necpl@pmis.com',
+    password: 'Necpl@2026',
+    role: 'Site Engineer',
+    organization: 'NECPL Site Office'
+  },
+  {
+    name: 'MMRCL',
+    userId: 'MMRCL',
+    email: 'mmrcl@pmis.com',
+    password: 'Mmrcl@2026',
+    role: 'Contractor',
+    organization: 'MMRCL Employer Office'
+  },
+  {
+    name: 'PMC & Architect',
+    userId: 'PMC',
+    email: 'pmc@pmis.com',
+    password: 'Pmc@2026',
+    role: 'Contractor',
+    organization: 'PMC & Architect Office'
+  },
+  {
     name: 'Contractor',
+    userId: 'CONTRACTOR',
     email: 'contractor@pmis.com',
     password: 'password123',
     role: 'Contractor',
@@ -170,6 +195,7 @@ const usersData = [
   },
   {
     name: 'Engineer',
+    userId: 'ENGINEER',
     email: 'engineer@pmis.com',
     password: 'password123',
     role: 'Site Engineer',
@@ -177,6 +203,7 @@ const usersData = [
   },
   {
     name: 'Employer Rep',
+    userId: 'EMPLOYER',
     email: 'employer@pmis.com',
     password: 'password123',
     role: "Employer's Office",
@@ -196,9 +223,10 @@ const seedDB = async () => {
     await SubmittalMatrix.deleteMany();
     console.log('Cleared SubmittalMatrix collection.');
 
-    // We only clear users that we seeded so we don't accidentally wipe user-created accounts
+    // We clear users that match userEmails or userIds
     const userEmails = usersData.map(u => u.email);
-    await User.deleteMany({ email: { $in: userEmails } });
+    const userIds = usersData.map(u => u.userId);
+    await User.deleteMany({ $or: [{ email: { $in: userEmails } }, { userId: { $in: userIds } }] });
     console.log('Cleared default seeded users.');
 
     // Insert submittals

@@ -82,8 +82,8 @@ router.get('/folders', protect, async (req, res) => {
 
 // @desc    Create new folder in a section
 // @route   POST /folders
-// @access  Private
-router.post('/folders', protect, authorize('Site Engineer', "Employer's Office"), async (req, res) => {
+// @access  Private (All Authenticated Users)
+router.post('/folders', protect, async (req, res) => {
   try {
     const section = getSection(req);
     const { name, parentFolder } = req.body;
@@ -110,9 +110,18 @@ router.post('/folders', protect, authorize('Site Engineer', "Employer's Office")
 
 // @desc    Delete a folder and all its documents in a section
 // @route   DELETE /folders/:id
-// @access  Private
-router.delete('/folders/:id', protect, authorize('Site Engineer', "Employer's Office"), async (req, res) => {
+// @access  Private (NECPL / Admin Only)
+router.delete('/folders/:id', protect, async (req, res) => {
   try {
+    const isFullRightsUser = req.user && (
+      req.user.role === 'Site Engineer' ||
+      (req.user.userId && req.user.userId.toUpperCase() === 'NECPL') ||
+      (req.user.email && req.user.email.toLowerCase().includes('necpl'))
+    );
+    if (!isFullRightsUser) {
+      return res.status(403).json({ success: false, message: 'Delete rights are reserved exclusively for NECPL (Admin).' });
+    }
+
     const section = getSection(req);
     const folder = await GeneralFolder.findOne({ _id: req.params.id, section });
     if (!folder) {
@@ -182,8 +191,8 @@ router.get('/', protect, async (req, res) => {
 
 // @desc    Upload new document in a section
 // @route   POST /
-// @access  Private
-router.post('/', protect, authorize('Site Engineer', "Employer's Office"), upload.single('file'), async (req, res) => {
+// @access  Private (All Authenticated Users)
+router.post('/', protect, upload.single('file'), async (req, res) => {
   try {
     const section = getSection(req);
     if (!req.file) {
@@ -280,9 +289,18 @@ router.get('/view/:id', protect, async (req, res) => {
 
 // @desc    Delete a document in a section
 // @route   DELETE /:id
-// @access  Private
-router.delete('/:id', protect, authorize('Site Engineer', "Employer's Office"), async (req, res) => {
+// @access  Private (NECPL / Admin Only)
+router.delete('/:id', protect, async (req, res) => {
   try {
+    const isFullRightsUser = req.user && (
+      req.user.role === 'Site Engineer' ||
+      (req.user.userId && req.user.userId.toUpperCase() === 'NECPL') ||
+      (req.user.email && req.user.email.toLowerCase().includes('necpl'))
+    );
+    if (!isFullRightsUser) {
+      return res.status(403).json({ success: false, message: 'Delete rights are reserved exclusively for NECPL (Admin).' });
+    }
+
     const section = getSection(req);
     const document = await GeneralDocument.findOne({ _id: req.params.id, section });
     if (!document) {

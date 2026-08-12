@@ -4,9 +4,75 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const connectDB = require('./config/db');
+const User = require('./models/User');
 
-// Connect to Database
-connectDB();
+// Connect to Database and ensure default accounts exist
+connectDB().then(async () => {
+  try {
+    const defaultUsers = [
+      {
+        name: 'NECPL',
+        userId: 'NECPL',
+        email: 'necpl@pmis.com',
+        password: 'Necpl@2026',
+        role: 'Site Engineer',
+        organization: 'NECPL Site Office'
+      },
+      {
+        name: 'MMRCL',
+        userId: 'MMRCL',
+        email: 'mmrcl@pmis.com',
+        password: 'Mmrcl@2026',
+        role: 'Contractor',
+        organization: 'MMRCL Employer Office'
+      },
+      {
+        name: 'PMC & Architect',
+        userId: 'PMC',
+        email: 'pmc@pmis.com',
+        password: 'Pmc@2026',
+        role: 'Contractor',
+        organization: 'PMC & Architect Office'
+      },
+      {
+        name: 'Contractor',
+        userId: 'CONTRACTOR',
+        email: 'contractor@pmis.com',
+        password: 'password123',
+        role: 'Contractor',
+        organization: 'L&T Construction MMRCL JV'
+      },
+      {
+        name: 'Engineer',
+        userId: 'ENGINEER',
+        email: 'engineer@pmis.com',
+        password: 'password123',
+        role: 'Site Engineer',
+        organization: 'MMRCL General Consultant Site Office'
+      }
+    ];
+
+    for (const u of defaultUsers) {
+      const existing = await User.findOne({
+        $or: [{ userId: u.userId }, { email: u.email }]
+      });
+      if (!existing) {
+        await User.create(u);
+        console.log(`[AutoSeed] Created account for ${u.userId}`);
+      } else {
+        existing.userId = u.userId;
+        existing.role = u.role;
+        existing.organization = u.organization;
+        existing.name = u.name;
+        existing.password = u.password;
+        await existing.save();
+        console.log(`[AutoSeed] Synced account for ${u.userId}`);
+      }
+    }
+  } catch (err) {
+    console.error('[AutoSeed] Error initializing users:', err.message);
+  }
+});
 
 const app = express();
 

@@ -16,6 +16,11 @@ const UserSchema = new mongoose.Schema({
       'Please add a valid email'
     ]
   },
+  userId: {
+    type: String,
+    trim: true,
+    uppercase: true
+  },
   role: {
     type: String,
     enum: ['Contractor', 'Site Engineer', "Employer's Office"],
