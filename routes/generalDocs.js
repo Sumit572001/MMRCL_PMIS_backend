@@ -10,14 +10,14 @@ const { protect, authorize } = require('../middleware/auth');
 
 // Multer storage engine configuration
 const storage = multer.diskStorage({
-  destination: function(req, file, cb) {
+  destination: function (req, file, cb) {
     const uploadDir = process.env.UPLOAD_DIR || 'uploads';
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
     cb(null, uploadDir);
   },
-  filename: function(req, file, cb) {
+  filename: function (req, file, cb) {
     const section = (req.section || req.params.section || 'general').toLowerCase();
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     cb(null, section + '-' + uniqueSuffix + path.extname(file.originalname));
@@ -51,7 +51,7 @@ router.get('/folders', protect, async (req, res) => {
   try {
     const section = getSection(req);
     let folders = await GeneralFolder.find({ section }).sort({ name: 1 });
-    
+
     // Auto seed if empty and defaults are defined
     if (folders.length === 0 && defaultFoldersBySection[section]) {
       const defaults = defaultFoldersBySection[section].map(name => ({ name, section }));
@@ -125,12 +125,12 @@ router.delete('/folders/:id', protect, async (req, res) => {
       }
 
       // Find documents inside this folder
-      const documents = await GeneralDocument.find({ 
+      const documents = await GeneralDocument.find({
         $or: [
           { folder: folderId.toString() },
           { folder: folder.name }
         ],
-        section 
+        section
       });
 
       // Delete physical files
@@ -193,20 +193,20 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide name and folder' });
     }
 
-     // Verify folder exists in this section
-     if (folder !== 'Root') {
-       const isObjectId = mongoose.isValidObjectId(folder);
-       const folderExists = await GeneralFolder.findOne({
-         $or: [
-           ...(isObjectId ? [{ _id: folder }] : []),
-           { name: folder }
-         ],
-         section
-       });
-       if (!folderExists) {
-         return res.status(404).json({ success: false, message: `Folder '${folder}' not found in this section` });
-       }
-     }
+    // Verify folder exists in this section
+    if (folder !== 'Root') {
+      const isObjectId = mongoose.isValidObjectId(folder);
+      const folderExists = await GeneralFolder.findOne({
+        $or: [
+          ...(isObjectId ? [{ _id: folder }] : []),
+          { name: folder }
+        ],
+        section
+      });
+      if (!folderExists) {
+        return res.status(404).json({ success: false, message: `Folder '${folder}' not found in this section` });
+      }
+    }
 
     const document = await GeneralDocument.create({
       name,
@@ -336,6 +336,49 @@ router.put('/:id', protect, authorize('Site Engineer', "Employer's Office"), asy
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Add a new remark message to a document in a section (WhatsApp-style Chat)
+// @route   PUT /:id/remark
+// @access  Private
+router.put('/:id/remark', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const text = (req.body.text || req.body.remark || '').trim();
+
+    if (!text) {
+      return res.status(400).json({ success: false, message: 'Remark text cannot be empty' });
+    }
+
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const remarkEntry = {
+      text,
+      user: req.user._id || req.user.id,
+      userName: req.user.name || req.user.userId || 'User',
+      userRole: req.user.role || req.user.organization || 'Member',
+      createdAt: new Date()
+    };
+
+    if (!document.remarks) {
+      document.remarks = [];
+    }
+
+    document.remarks.push(remarkEntry);
+    document.remark = text; // Keep last remark summary
+
+    await document.save();
 
     res.status(200).json({
       success: true,

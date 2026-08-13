@@ -38,7 +38,20 @@ const GeneralDocumentSchema = new mongoose.Schema({
   uploadedAt: {
     type: Date,
     default: Date.now
-  }
+  },
+  remark: {
+    type: String,
+    default: ''
+  },
+  remarks: [
+    {
+      text: { type: String, required: true },
+      user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      userName: { type: String, default: 'User' },
+      userRole: { type: String, default: 'User' },
+      createdAt: { type: Date, default: Date.now }
+    }
+  ]
 });
 
 module.exports = mongoose.model('GeneralDocument', GeneralDocumentSchema);
