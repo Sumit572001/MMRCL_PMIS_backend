@@ -37,18 +37,7 @@ const defaultFoldersBySection = {
   ]
 };
 
-// Clean up seeded folders for other sections (run once at start)
-const cleanupSeededFolders = async () => {
-  try {
-    const result = await GeneralFolder.deleteMany({ section: { $ne: 'tender' } });
-    if (result.deletedCount > 0) {
-      console.log(`[Cleanup] Deleted ${result.deletedCount} pre-seeded folders for non-tender sections.`);
-    }
-  } catch (err) {
-    console.error('[Cleanup] Failed to clean up pre-seeded folders:', err);
-  }
-};
-cleanupSeededFolders();
+
 
 // Helper to get section safely
 const getSection = (req) => {
