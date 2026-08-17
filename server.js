@@ -88,22 +88,19 @@ if (!fs.existsSync(uploadPath)) {
   fs.mkdirSync(uploadPath, { recursive: true });
 }
 
-// Ensure building images are copied to uploads directory
+// Ensure building image exist in uploads directory if missing
 try {
   const userHome = process.env.USERPROFILE || process.env.HOME || 'C:\\Users\\Sumit Verma';
-  const brainDir = path.join(userHome, '.gemini', 'antigravity-ide', 'brain', '4a096d0c-db9d-485c-a760-a14a8aa77b43');
+  const currentMediaImg = path.join(userHome, '.gemini', 'antigravity-ide', 'brain', 'd918d6f0-235b-4815-9068-47ccd74b9959', 'media__1786973200429.png');
+  const targetImg = path.join(uploadPath, 'metro_bhawan.jpg');
+  const targetPng = path.join(uploadPath, 'metro_bhawan_building.png');
 
-  const originalImg = path.join(brainDir, 'media__1786338713542.jpg');
-  if (fs.existsSync(originalImg)) {
-    fs.copyFileSync(originalImg, path.join(uploadPath, 'metro_bhawan.jpg'));
-  }
-
-  const generatedImg = path.join(brainDir, 'metro_bhawan_building_1786340065521.png');
-  if (fs.existsSync(generatedImg)) {
-    fs.copyFileSync(generatedImg, path.join(uploadPath, 'metro_bhawan_building.png'));
+  if (fs.existsSync(currentMediaImg)) {
+    fs.copyFileSync(currentMediaImg, targetImg);
+    fs.copyFileSync(currentMediaImg, targetPng);
   }
 } catch (e) {
-  console.log('Building image copy notice:', e.message);
+  console.log('Building image sync notice:', e.message);
 }
 
 // Serve uploaded files statically
