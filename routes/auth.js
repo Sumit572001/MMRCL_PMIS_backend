@@ -121,4 +121,36 @@ router.get('/me', protect, async (req, res) => {
   }
 });
 
+// @desc    Reset user password
+// @route   POST /api/auth/reset-password
+// @access  Public
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { userId, newPassword } = req.body;
+    if (!userId || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Please provide User ID and new password' });
+    }
+
+    const cleanId = String(userId).trim();
+    const user = await User.findOne({
+      $or: [
+        { email: new RegExp('^' + cleanId + '$', 'i') },
+        { userId: new RegExp('^' + cleanId + '$', 'i') },
+        { name: new RegExp('^' + cleanId + '$', 'i') }
+      ]
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found with this User ID / Email' });
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    res.status(200).json({ success: true, message: 'Password updated successfully' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;
