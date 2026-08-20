@@ -208,6 +208,8 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       }
     }
 
+    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
+
     const document = await GeneralDocument.create({
       name,
       folder,
@@ -216,7 +218,8 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       originalName: req.file.originalname,
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
-      uploadedBy: req.user.id
+      uploadedBy: req.user.id,
+      viewedBy: [currentUserId]
     });
 
     res.status(201).json({
@@ -363,12 +366,15 @@ router.put('/:id/remark', protect, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
 
+    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
+
     const remarkEntry = {
       text,
       user: req.user._id || req.user.id,
       userName: req.user.name || req.user.userId || 'User',
       userRole: req.user.role || req.user.organization || 'Member',
-      createdAt: new Date()
+      createdAt: new Date(),
+      readBy: [currentUserId]
     };
 
     if (!document.remarks) {
@@ -384,6 +390,159 @@ router.put('/:id/remark', protect, async (req, res) => {
       success: true,
       data: document
     });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Mark all remarks as read for current user
+// @route   PUT /:id/remark/read
+// @access  Private
+router.put('/:id/remark/read', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
+
+    let updated = false;
+    if (document.remarks && document.remarks.length > 0) {
+      document.remarks.forEach(rem => {
+        if (!rem.readBy) rem.readBy = [];
+        if (!rem.readBy.includes(currentUserId)) {
+          rem.readBy.push(currentUserId);
+          updated = true;
+        }
+      });
+    }
+
+    if (updated) {
+      await document.save();
+    }
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Delete a remark message from a document
+// @route   DELETE /:id/remark/:remarkId
+// @access  Private
+router.delete('/:id/remark/:remarkId', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    if (document.remarks && document.remarks.length > 0) {
+      document.remarks = document.remarks.filter(rem => rem._id.toString() !== req.params.remarkId);
+      const lastRem = document.remarks[document.remarks.length - 1];
+      document.remark = lastRem ? lastRem.text : '';
+      await document.save();
+    }
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// Global baseline timestamp for notifications: Only documents uploaded after this feature timestamp show up in new upload notifications panel
+const notificationBaseline = new Date('2026-08-20T16:50:00.000Z');
+
+// @desc    Get all recently uploaded documents across all sections for notifications
+// @route   GET /all-uploads
+// @access  Private
+router.get('/all-uploads', protect, async (req, res) => {
+  try {
+    const documents = await GeneralDocument.find({
+      uploadedAt: { $gte: notificationBaseline }
+    })
+      .populate('uploadedBy', 'name role')
+      .sort({ uploadedAt: -1 })
+      .limit(50)
+      .lean();
+
+    // Map folder ObjectId to human-readable folder name
+    const folderIds = documents
+      .map(d => d.folder)
+      .filter(f => f && f !== 'Root' && mongoose.isValidObjectId(f));
+
+    const folders = await GeneralFolder.find({ _id: { $in: folderIds } }).select('_id name');
+    const folderMap = {};
+    folders.forEach(f => {
+      folderMap[f._id.toString()] = f.name;
+    });
+
+    const data = documents.map(d => ({
+      ...d,
+      folderName: folderMap[d.folder] || d.folder
+    }));
+
+    res.status(200).json({
+      success: true,
+      count: data.length,
+      data
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Mark a document as viewed by current user
+// @route   PUT /:id/viewed
+// @access  Private
+router.put('/:id/viewed', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
+
+    if (!document.viewedBy) {
+      document.viewedBy = [];
+    }
+
+    if (!document.viewedBy.includes(currentUserId)) {
+      document.viewedBy.push(currentUserId);
+      await document.save();
+    }
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Clear / Mark all notifications as read for current user
+// @route   PUT /mark-all-read
+// @access  Private
+router.put('/mark-all-read', protect, async (req, res) => {
+  try {
+    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
+    await GeneralDocument.updateMany(
+      { viewedBy: { $ne: currentUserId } },
+      { $addToSet: { viewedBy: currentUserId } }
+    );
+    res.status(200).json({ success: true, message: 'All notifications marked as read' });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }

@@ -49,9 +49,11 @@ const GeneralDocumentSchema = new mongoose.Schema({
       user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       userName: { type: String, default: 'User' },
       userRole: { type: String, default: 'User' },
-      createdAt: { type: Date, default: Date.now }
+      createdAt: { type: Date, default: Date.now },
+      readBy: [{ type: String }]
     }
-  ]
+  ],
+  viewedBy: [{ type: String }]
 });
 
 module.exports = mongoose.model('GeneralDocument', GeneralDocumentSchema);
