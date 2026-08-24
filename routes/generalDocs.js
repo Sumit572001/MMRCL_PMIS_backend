@@ -426,6 +426,246 @@ router.get('/remark-attachment/:filename', protect, async (req, res) => {
   }
 });
 
+// @desc    Upload a sub-document / revision for a parent document
+// @route   POST /:id/sub-document
+// @access  Private
+router.post('/:id/sub-document', protect, upload.single('file'), async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Please upload a file' });
+    }
+
+    const { name } = req.body;
+    const subDoc = {
+      name: name || req.file.originalname,
+      originalName: req.file.originalname,
+      filePath: req.file.filename,
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype,
+      uploadedBy: req.user._id || req.user.id,
+      uploadedByName: req.user.userId || req.user.name || 'User',
+      uploadedAt: new Date()
+    };
+
+    if (!document.subDocuments) {
+      document.subDocuments = [];
+    }
+
+    document.subDocuments.push(subDoc);
+    await document.save();
+
+    res.status(201).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Rename a sub-document
+// @route   PUT /:id/sub-document/:subId/rename
+// @access  Private
+router.put('/:id/sub-document/:subId/rename', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid name' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    subDoc.name = name.trim();
+    await document.save();
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Delete a sub-document
+// @route   DELETE /:id/sub-document/:subId
+// @access  Private
+router.delete('/:id/sub-document/:subId', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    const filePath = path.join(uploadDir, path.basename(subDoc.filePath));
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (e) {
+        console.error('Error removing file:', e);
+      }
+    }
+
+    document.subDocuments.pull(req.params.subId);
+    await document.save();
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Add remark to sub-document
+// @route   POST /:id/sub-document/:subId/remark
+// @access  Private
+router.post('/:id/sub-document/:subId/remark', protect, (req, res, next) => {
+  // Try multipart upload, fall back gracefully for JSON
+  upload.array('attachments', 5)(req, res, (err) => {
+    if (err) {
+      // If multer fails (e.g. content-type is JSON), continue with empty files
+      req.files = [];
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    const { text } = req.body;
+    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
+
+    const attachments = (req.files || []).map(f => ({
+      filePath: f.filename,
+      originalName: f.originalname,
+      fileSize: f.size,
+      mimeType: f.mimetype
+    }));
+
+    const remarkEntry = {
+      text: text || '',
+      user: req.user._id || req.user.id,
+      userName: req.user.userId || req.user.name || 'User',
+      userRole: req.user.organization || req.user.role || 'Member',
+      createdAt: new Date(),
+      readBy: [currentUserId],
+      attachments
+    };
+
+    if (!subDoc.remarks) {
+      subDoc.remarks = [];
+    }
+
+    subDoc.remarks.push(remarkEntry);
+    await document.save();
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Mark sub-document remarks as read
+// @route   PUT /:id/sub-document/:subId/remark/read
+// @access  Private
+router.put('/:id/sub-document/:subId/remark/read', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
+
+    if (subDoc.remarks && subDoc.remarks.length > 0) {
+      subDoc.remarks.forEach(rem => {
+        if (!rem.readBy) rem.readBy = [];
+        if (!rem.readBy.includes(currentUserId)) {
+          rem.readBy.push(currentUserId);
+        }
+      });
+      await document.save();
+    }
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Clear all remarks for a sub-document
+// @route   DELETE /:id/sub-document/:subId/remarks/clear-all
+// @access  Private
+router.delete('/:id/sub-document/:subId/remarks/clear-all', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    subDoc.remarks = [];
+    await document.save();
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 // @desc    Mark all remarks as read for current user
 // @route   PUT /:id/remark/read
 // @access  Private
