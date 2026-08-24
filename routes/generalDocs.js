@@ -349,16 +349,23 @@ router.put('/:id', protect, authorize('Site Engineer', "Employer's Office"), asy
   }
 });
 
-// @desc    Add a new remark message to a document in a section (WhatsApp-style Chat)
+// @desc    Add a new remark message to a document in a section (WhatsApp-style Chat with Attachments)
 // @route   PUT /:id/remark
 // @access  Private
-router.put('/:id/remark', protect, async (req, res) => {
+router.put('/:id/remark', protect, upload.any(), async (req, res) => {
   try {
     const section = getSection(req);
     const text = (req.body.text || req.body.remark || '').trim();
 
-    if (!text) {
-      return res.status(400).json({ success: false, message: 'Remark text cannot be empty' });
+    let uploadedFiles = [];
+    if (req.files && Array.isArray(req.files)) {
+      uploadedFiles = req.files;
+    } else if (req.file) {
+      uploadedFiles = [req.file];
+    }
+
+    if (!text && uploadedFiles.length === 0) {
+      return res.status(400).json({ success: false, message: 'Please enter text or attach a file' });
     }
 
     const document = await GeneralDocument.findOne({ _id: req.params.id, section });
@@ -368,13 +375,21 @@ router.put('/:id/remark', protect, async (req, res) => {
 
     const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
 
+    const attachments = uploadedFiles.map(f => ({
+      filePath: f.path,
+      originalName: f.originalname,
+      fileSize: f.size,
+      mimeType: f.mimetype
+    }));
+
     const remarkEntry = {
       text,
       user: req.user._id || req.user.id,
-      userName: req.user.name || req.user.userId || 'User',
-      userRole: req.user.role || req.user.organization || 'Member',
+      userName: req.user.userId || req.user.name || 'User',
+      userRole: req.user.organization || req.user.role || 'Member',
       createdAt: new Date(),
-      readBy: [currentUserId]
+      readBy: [currentUserId],
+      attachments
     };
 
     if (!document.remarks) {
@@ -382,7 +397,7 @@ router.put('/:id/remark', protect, async (req, res) => {
     }
 
     document.remarks.push(remarkEntry);
-    document.remark = text; // Keep last remark summary
+    document.remark = text || (attachments.length > 0 ? `[Attachment: ${attachments[0].originalName}]` : '');
 
     await document.save();
 
@@ -390,6 +405,22 @@ router.put('/:id/remark', protect, async (req, res) => {
       success: true,
       data: document
     });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    View/Download remark attachment
+// @route   GET /remark-attachment/:filename
+// @access  Private
+router.get('/remark-attachment/:filename', protect, async (req, res) => {
+  try {
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    const filePath = path.join(uploadDir, path.basename(req.params.filename));
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: 'Attachment file not found' });
+    }
+    res.sendFile(path.resolve(filePath));
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -543,6 +574,38 @@ router.put('/mark-all-read', protect, async (req, res) => {
       { $addToSet: { viewedBy: currentUserId } }
     );
     res.status(200).json({ success: true, message: 'All notifications marked as read' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Clear all remarks from a specific document
+// @route   DELETE /:id/remarks/clear-all
+// @access  Private
+router.delete('/:id/remarks/clear-all', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOneAndUpdate(
+      { _id: req.params.id, section },
+      { $set: { remarks: [], remark: '' } },
+      { new: true }
+    );
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+    res.status(200).json({ success: true, data: document });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Reset all remarks for all documents in DB
+// @route   PUT /reset-all-remarks
+// @access  Private
+router.put('/reset-all-remarks', protect, async (req, res) => {
+  try {
+    await GeneralDocument.updateMany({}, { $set: { remarks: [], remark: '' } });
+    res.status(200).json({ success: true, message: 'All test remarks cleared successfully' });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }

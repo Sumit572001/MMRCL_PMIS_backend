@@ -45,12 +45,20 @@ const GeneralDocumentSchema = new mongoose.Schema({
   },
   remarks: [
     {
-      text: { type: String, required: true },
+      text: { type: String, default: '' },
       user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       userName: { type: String, default: 'User' },
       userRole: { type: String, default: 'User' },
       createdAt: { type: Date, default: Date.now },
-      readBy: [{ type: String }]
+      readBy: [{ type: String }],
+      attachments: [
+        {
+          filePath: { type: String },
+          originalName: { type: String },
+          fileSize: { type: Number },
+          mimeType: { type: String }
+        }
+      ]
     }
   ],
   viewedBy: [{ type: String }]
