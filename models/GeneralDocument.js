@@ -43,6 +43,18 @@ const GeneralDocumentSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  approvalAuthority: {
+    type: String,
+    default: ''
+  },
+  approvedBy: {
+    type: String,
+    default: ''
+  },
+  approvalStatus: {
+    type: String,
+    default: 'Approved'
+  },
   remarks: [
     {
       text: { type: String, default: '' },
@@ -72,6 +84,9 @@ const GeneralDocumentSchema = new mongoose.Schema({
       uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       uploadedByName: { type: String, default: 'User' },
       uploadedAt: { type: Date, default: Date.now },
+      approvalAuthority: { type: String, default: '' },
+      approvedBy: { type: String, default: '' },
+      approvalStatus: { type: String, default: 'Approved' },
       remarks: [
         {
           text: { type: String, default: '' },

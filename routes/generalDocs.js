@@ -916,4 +916,166 @@ router.get('/:id/sub-document/:subId/view', protect, async (req, res) => {
   }
 });
 
+// @desc    Update document approval authority
+// @route   PUT /:id/approval-authority
+// @access  Private
+router.put('/:id/approval-authority', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const { authority } = req.body;
+    
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    if (authority && authority.trim() !== '') {
+      document.approvalAuthority = authority.trim();
+      document.approvalStatus = 'Unapproved';
+      document.approvedBy = '';
+    } else {
+      document.approvalAuthority = '';
+      document.approvalStatus = 'Approved';
+      document.approvedBy = '';
+    }
+
+    await document.save();
+    res.status(200).json({ success: true, data: document });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Approve document
+// @route   POST /:id/approve
+// @access  Private
+router.post('/:id/approve', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const authority = document.approvalAuthority;
+    if (!authority) {
+      return res.status(400).json({ success: false, message: 'No approval authority assigned' });
+    }
+
+    // Validate if current logged in user matches the authority
+    const user = req.user;
+    const authUpper = authority.toUpperCase();
+    const userName = (user.name || '').toUpperCase();
+    const userId = (user.userId || '').toUpperCase();
+    const userOrg = (user.organization || '').toUpperCase();
+    const userRole = (user.role || '').toUpperCase();
+    
+    const matches = userName.includes(authUpper) || 
+                    userId.includes(authUpper) || 
+                    userOrg.includes(authUpper) || 
+                    userRole.includes(authUpper);
+
+    if (!matches) {
+      return res.status(403).json({ 
+        success: false, 
+        message: `Only users representing ${authority} are authorized to approve this document.` 
+      });
+    }
+
+    document.approvalStatus = 'Approved';
+    document.approvedBy = authority;
+
+    await document.save();
+    res.status(200).json({ success: true, data: document });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Update sub-document approval authority
+// @route   PUT /:id/sub-document/:subId/approval-authority
+// @access  Private
+router.put('/:id/sub-document/:subId/approval-authority', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const { authority } = req.body;
+
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    if (authority && authority.trim() !== '') {
+      subDoc.approvalAuthority = authority.trim();
+      subDoc.approvalStatus = 'Unapproved';
+      subDoc.approvedBy = '';
+    } else {
+      subDoc.approvalAuthority = '';
+      subDoc.approvalStatus = 'Approved';
+      subDoc.approvedBy = '';
+    }
+
+    await document.save();
+    res.status(200).json({ success: true, data: document });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Approve sub-document
+// @route   POST /:id/sub-document/:subId/approve
+// @access  Private
+router.post('/:id/sub-document/:subId/approve', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    const authority = subDoc.approvalAuthority;
+    if (!authority) {
+      return res.status(400).json({ success: false, message: 'No approval authority assigned' });
+    }
+
+    // Validate if current logged in user matches the authority
+    const user = req.user;
+    const authUpper = authority.toUpperCase();
+    const userName = (user.name || '').toUpperCase();
+    const userId = (user.userId || '').toUpperCase();
+    const userOrg = (user.organization || '').toUpperCase();
+    const userRole = (user.role || '').toUpperCase();
+    
+    const matches = userName.includes(authUpper) || 
+                    userId.includes(authUpper) || 
+                    userOrg.includes(authUpper) || 
+                    userRole.includes(authUpper);
+
+    if (!matches) {
+      return res.status(403).json({ 
+        success: false, 
+        message: `Only users representing ${authority} are authorized to approve this sub-document.` 
+      });
+    }
+
+    subDoc.approvalStatus = 'Approved';
+    subDoc.approvedBy = authority;
+
+    await document.save();
+    res.status(200).json({ success: true, data: document });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;
