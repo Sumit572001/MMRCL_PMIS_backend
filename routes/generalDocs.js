@@ -851,4 +851,69 @@ router.put('/reset-all-remarks', protect, async (req, res) => {
   }
 });
 
+// @desc    Download a sub-document file
+// @route   GET /:id/sub-document/:subId/download
+// @access  Private
+router.get('/:id/sub-document/:subId/download', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    // filePath may be stored as just the filename or as a full path
+    const filename = path.basename(subDoc.filePath);
+    const resolvedPath = path.resolve(path.join(uploadDir, filename));
+
+    if (!fs.existsSync(resolvedPath)) {
+      return res.status(404).json({ success: false, message: 'Physical file not found on server storage' });
+    }
+
+    res.download(resolvedPath, subDoc.originalName || filename);
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    View a sub-document file inline
+// @route   GET /:id/sub-document/:subId/view
+// @access  Private
+router.get('/:id/sub-document/:subId/view', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    const filename = path.basename(subDoc.filePath);
+    const resolvedPath = path.resolve(path.join(uploadDir, filename));
+
+    if (!fs.existsSync(resolvedPath)) {
+      return res.status(404).json({ success: false, message: 'Physical file not found on server storage' });
+    }
+
+    if (subDoc.mimeType) {
+      res.setHeader('Content-Type', subDoc.mimeType);
+    }
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(subDoc.originalName || filename)}"`);
+    res.sendFile(resolvedPath);
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;
