@@ -319,20 +319,21 @@ router.delete('/:id', protect, async (req, res) => {
   }
 });
 
-// @desc    Rename a document in a section
+// @desc    Rename or Move a document in a section
 // @route   PUT /:id
 // @access  Private
-router.put('/:id', protect, authorize('Site Engineer', "Employer's Office"), async (req, res) => {
+router.put('/:id', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const { name } = req.body;
-    if (!name) {
-      return res.status(400).json({ success: false, message: 'Please provide a new name' });
-    }
+    const { name, folder } = req.body;
+
+    let updateFields = {};
+    if (name) updateFields.name = name.trim();
+    if (folder !== undefined) updateFields.folder = folder;
 
     const document = await GeneralDocument.findOneAndUpdate(
       { _id: req.params.id, section },
-      { name: name.trim() },
+      updateFields,
       { new: true }
     );
 
@@ -962,28 +963,41 @@ router.post('/:id/approve', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'No approval authority assigned' });
     }
 
-    // Validate if current logged in user matches the authority
+    const authList = authority.split(',').map(a => a.trim().toUpperCase()).filter(Boolean);
     const user = req.user;
-    const authUpper = authority.toUpperCase();
     const userName = (user.name || '').toUpperCase();
     const userId = (user.userId || '').toUpperCase();
     const userOrg = (user.organization || '').toUpperCase();
     const userRole = (user.role || '').toUpperCase();
-    
-    const matches = userName.includes(authUpper) || 
-                    userId.includes(authUpper) || 
-                    userOrg.includes(authUpper) || 
-                    userRole.includes(authUpper);
 
-    if (!matches) {
-      return res.status(403).json({ 
-        success: false, 
-        message: `Only users representing ${authority} are authorized to approve this document.` 
+    const matchedAuth = authList.find(authUpper =>
+      userName.includes(authUpper) ||
+      userId.includes(authUpper) ||
+      userOrg.includes(authUpper) ||
+      userRole.includes(authUpper)
+    );
+
+    if (!matchedAuth) {
+      return res.status(403).json({
+        success: false,
+        message: `Only users representing ${authority} are authorized to approve this document.`
       });
     }
 
-    document.approvalStatus = 'Approved';
-    document.approvedBy = authority;
+    const originalAuthList = authority.split(',').map(a => a.trim()).filter(Boolean);
+    const matchedOriginalAuth = originalAuthList.find(a => a.toUpperCase() === matchedAuth);
+
+    let currentApprovedArray = document.approvedBy ? document.approvedBy.split(',').map(a => a.trim()).filter(Boolean) : [];
+    if (matchedOriginalAuth && !currentApprovedArray.includes(matchedOriginalAuth)) {
+      currentApprovedArray.push(matchedOriginalAuth);
+    }
+
+    document.approvedBy = currentApprovedArray.join(', ');
+
+    const isFullyApproved = originalAuthList.every(a => currentApprovedArray.includes(a));
+    if (isFullyApproved) {
+      document.approvalStatus = 'Approved';
+    }
 
     await document.save();
     res.status(200).json({ success: true, data: document });
@@ -1048,28 +1062,41 @@ router.post('/:id/sub-document/:subId/approve', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'No approval authority assigned' });
     }
 
-    // Validate if current logged in user matches the authority
+    const authList = authority.split(',').map(a => a.trim().toUpperCase()).filter(Boolean);
     const user = req.user;
-    const authUpper = authority.toUpperCase();
     const userName = (user.name || '').toUpperCase();
     const userId = (user.userId || '').toUpperCase();
     const userOrg = (user.organization || '').toUpperCase();
     const userRole = (user.role || '').toUpperCase();
-    
-    const matches = userName.includes(authUpper) || 
-                    userId.includes(authUpper) || 
-                    userOrg.includes(authUpper) || 
-                    userRole.includes(authUpper);
 
-    if (!matches) {
-      return res.status(403).json({ 
-        success: false, 
-        message: `Only users representing ${authority} are authorized to approve this sub-document.` 
+    const matchedAuth = authList.find(authUpper =>
+      userName.includes(authUpper) ||
+      userId.includes(authUpper) ||
+      userOrg.includes(authUpper) ||
+      userRole.includes(authUpper)
+    );
+
+    if (!matchedAuth) {
+      return res.status(403).json({
+        success: false,
+        message: `Only users representing ${authority} are authorized to approve this sub-document.`
       });
     }
 
-    subDoc.approvalStatus = 'Approved';
-    subDoc.approvedBy = authority;
+    const originalAuthList = authority.split(',').map(a => a.trim()).filter(Boolean);
+    const matchedOriginalAuth = originalAuthList.find(a => a.toUpperCase() === matchedAuth);
+
+    let currentApprovedArray = subDoc.approvedBy ? subDoc.approvedBy.split(',').map(a => a.trim()).filter(Boolean) : [];
+    if (matchedOriginalAuth && !currentApprovedArray.includes(matchedOriginalAuth)) {
+      currentApprovedArray.push(matchedOriginalAuth);
+    }
+
+    subDoc.approvedBy = currentApprovedArray.join(', ');
+
+    const isFullyApproved = originalAuthList.every(a => currentApprovedArray.includes(a));
+    if (isFullyApproved) {
+      subDoc.approvalStatus = 'Approved';
+    }
 
     await document.save();
     res.status(200).json({ success: true, data: document });

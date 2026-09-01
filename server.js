@@ -99,6 +99,19 @@ try {
     fs.copyFileSync(currentMediaImg, targetImg);
     fs.copyFileSync(currentMediaImg, targetPng);
   }
+
+  const targetNyati = path.join(uploadPath, 'nyati_logo.png');
+  const possibleNyatiPaths = [
+    path.join(userHome, '.gemini', 'antigravity-ide', 'brain', 'tempmediaStorage', 'media__1788257338958.png'),
+    path.join(userHome, '.gemini', 'antigravity-ide', 'brain', 'be14c2ba-a480-4c98-9d2d-c64cd345ce35', 'media__1788257338958.png')
+  ];
+  for (const p of possibleNyatiPaths) {
+    if (fs.existsSync(p)) {
+      fs.copyFileSync(p, targetNyati);
+      console.log('[AutoSync] Synced nyati_logo.png to uploads from:', p);
+      break;
+    }
+  }
 } catch (e) {
   console.log('Building image sync notice:', e.message);
 }
@@ -148,6 +161,11 @@ app.use('/api/mep', (req, res, next) => {
 
 app.use('/api/registrations', (req, res, next) => {
   req.section = 'project documents & registration';
+  next();
+}, require('./routes/generalDocs'));
+
+app.use('/api/rfi', (req, res, next) => {
+  req.section = 'rfi';
   next();
 }, require('./routes/generalDocs'));
 
