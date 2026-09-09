@@ -7,6 +7,7 @@ const Document = require('../models/Document');
 const SubmittalMatrix = require('../models/SubmittalMatrix');
 const ActivityLog = require('../models/ActivityLog');
 const { protect, authorize } = require('../middleware/auth');
+const { notifyNewDocumentUpload } = require('../utils/emailService');
 
 // Multer storage engine configuration
 const storage = multer.diskStorage({
@@ -157,6 +158,16 @@ router.post('/', protect, authorize('Contractor'), upload.single('file'), async 
       { originalName: req.file.originalname, fileSize: req.file.size }
     );
 
+    // Trigger non-blocking async Email Notification
+    notifyNewDocumentUpload({
+      uploaderName: req.user.name || req.user.userId || 'PMIS User',
+      docName: `${title} (${documentNumber})`,
+      sectionName: 'Submittals & Documents',
+      folderName: matrixItem ? matrixItem.name : 'Submittals',
+      originalFileName: req.file.originalname,
+      uploadedAt: document.createdAt
+    }).catch(err => console.error('[EmailTrigger Error]', err));
+
     res.status(201).json({
       success: true,
       data: document
@@ -225,6 +236,16 @@ router.post('/:id/version', protect, authorize('Contractor'), upload.single('fil
       `Uploaded version ${revision} of "${document.title}"`,
       { originalName: req.file.originalname, fileSize: req.file.size }
     );
+
+    // Trigger non-blocking async Email Notification
+    notifyNewDocumentUpload({
+      uploaderName: req.user.name || req.user.userId || 'PMIS User',
+      docName: `${document.title} (${document.documentNumber} - Revision ${revision})`,
+      sectionName: 'Submittals & Documents',
+      folderName: 'Submittal Revisions',
+      originalFileName: req.file.originalname,
+      uploadedAt: new Date()
+    }).catch(err => console.error('[EmailTrigger Error]', err));
 
     res.status(200).json({
       success: true,

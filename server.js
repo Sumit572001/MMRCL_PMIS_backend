@@ -49,6 +49,119 @@ connectDB().then(async () => {
         password: 'password123',
         role: 'Site Engineer',
         organization: 'MMRCL General Consultant Site Office'
+      },
+      // 14 Official Project Accounts
+      {
+        name: 'Md Aasim Sulaiman',
+        userId: 'AASIM_MMRCL',
+        email: 'md.aasim@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: "Employer's Office",
+        organization: 'Civil - Executive Director (Tracks)'
+      },
+      {
+        name: 'Mr Rajesh Patil',
+        userId: 'RAJESH_MMRCL',
+        email: 'rajesh.patil@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: "Employer's Office",
+        organization: 'Civil - Deputy General Manager'
+      },
+      {
+        name: 'Mr Sachin Aher',
+        userId: 'SACHIN_MMRCL',
+        email: 'sachin.aher@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: 'Site Engineer',
+        organization: 'Civil - Deputy Engineer'
+      },
+      {
+        name: 'Mr Vikrant Tewathia',
+        userId: 'VIKRANT_MMRCL',
+        email: 'vikrant.tewathia@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: 'Contractor',
+        organization: 'Architect - Deputy General Manager'
+      },
+      {
+        name: 'Dr Vishwas Ajnalkar',
+        userId: 'VISHWAS_MMRCL',
+        email: 'vishwas.ajnalkar@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: "Employer's Office",
+        organization: 'MEP - General Manager (Electrical)'
+      },
+      {
+        name: 'Cdr Ashish Saxena',
+        userId: 'ASHISH_MMRCL',
+        email: 'ashish.saxena@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: "Employer's Office",
+        organization: 'MEP - Additional General Manager'
+      },
+      {
+        name: 'Ms Neha Bhoi',
+        userId: 'NEHA_MMRCL',
+        email: 'neha.bhoi@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: 'Site Engineer',
+        organization: 'MEP - Deputy Engineer'
+      },
+      {
+        name: 'Mr Rajeev Kumar',
+        userId: 'RAJEEV_MMRCL',
+        email: 'rajeev.kumar@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: "Employer's Office",
+        organization: 'Telecom & IT - Principal Executive Director'
+      },
+      {
+        name: 'Mr Sudhir Sahare',
+        userId: 'SUDHIR_MMRCL',
+        email: 'sudhir.sahare@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: "Employer's Office",
+        organization: 'Telecom & IT - Sr. DGM (Telecom)'
+      },
+      {
+        name: 'Mr Rutesh Jadhav',
+        userId: 'RUTESH_MMRCL',
+        email: 'Rutesh.Jadhav@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: 'Contractor',
+        organization: 'Telecom & IT - AGM (Telecom)'
+      },
+      {
+        name: 'Mr Sumit Patil',
+        userId: 'SUMIT_MMRCL',
+        email: 'sumit.patil@mmrcl.com',
+        password: 'Mmrcl@2026',
+        role: 'Contractor',
+        organization: 'Telecom & IT - DGM (IT)'
+      },
+      {
+        name: 'Architect Office',
+        userId: 'ARCH_MMRCL',
+        email: 'arch.mmrcl@gmail.com',
+        password: 'Mmrcl@2026',
+        role: 'Contractor',
+        organization: 'Architect Office'
+      },
+      {
+        name: 'PMC Office',
+        userId: 'PMC_MMRCL',
+        email: 'pmc.mmrcl@gmail.com',
+        password: 'Mmrcl@2026',
+        role: 'Contractor',
+        organization: 'PMC Office'
+      },
+      {
+        name: 'Nyati Group Coordination',
+        userId: 'NYATI_MMRCL',
+        email: 'coordination.mmrcl@nyatigroup.com',
+        password: 'Mmrcl@2026',
+        role: 'Contractor',
+        organization: 'Nyati Group Coordination'
       }
     ];
 

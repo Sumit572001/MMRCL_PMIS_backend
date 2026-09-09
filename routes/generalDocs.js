@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 const GeneralDocument = require('../models/GeneralDocument');
 const GeneralFolder = require('../models/GeneralFolder');
 const { protect, authorize } = require('../middleware/auth');
+const { notifyNewDocumentUpload } = require('../utils/emailService');
 
 // Multer storage engine configuration
 const storage = multer.diskStorage({
@@ -221,6 +222,16 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       uploadedBy: req.user.id,
       viewedBy: [currentUserId]
     });
+
+    // Trigger non-blocking async Email Notification to all 14 users
+    notifyNewDocumentUpload({
+      uploaderName: req.user.name || req.user.userId || 'PMIS User',
+      docName: name,
+      sectionName: section,
+      folderName: folder,
+      originalFileName: req.file.originalname,
+      uploadedAt: document.uploadedAt
+    }).catch(err => console.error('[EmailTrigger Error]', err));
 
     res.status(201).json({
       success: true,
@@ -460,6 +471,16 @@ router.post('/:id/sub-document', protect, upload.single('file'), async (req, res
 
     document.subDocuments.push(subDoc);
     await document.save();
+
+    // Trigger non-blocking async Email Notification for sub-document revision
+    notifyNewDocumentUpload({
+      uploaderName: req.user.name || req.user.userId || 'PMIS User',
+      docName: `${document.name} (Revision: ${subDoc.name})`,
+      sectionName: section,
+      folderName: document.folder || 'Sub-Document',
+      originalFileName: req.file.originalname,
+      uploadedAt: subDoc.uploadedAt
+    }).catch(err => console.error('[EmailTrigger Error]', err));
 
     res.status(201).json({
       success: true,
