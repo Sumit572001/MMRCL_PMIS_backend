@@ -296,10 +296,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5005;
 
-const server = app.listen(PORT, () => {
-  console.log(`PMIS Backend Server running on port ${PORT}`);
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`PMIS Backend Server running on port ${PORT} (0.0.0.0)`);
 });
 
 process.on('unhandledRejection', (err, promise) => {

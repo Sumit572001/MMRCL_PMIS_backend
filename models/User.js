@@ -11,10 +11,8 @@ const UserSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Please add an email'],
     unique: true,
-    match: [
-      /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
-      'Please add a valid email'
-    ]
+    lowercase: true,
+    trim: true
   },
   userId: {
     type: String,
@@ -24,17 +22,16 @@ const UserSchema = new mongoose.Schema({
   role: {
     type: String,
     enum: ['Contractor', 'Site Engineer', "Employer's Office"],
-    required: [true, 'Please add a role']
+    default: 'Contractor'
   },
   organization: {
     type: String,
-    required: [true, 'Please add an organization/office name'],
+    default: 'NECPL',
     trim: true
   },
   password: {
     type: String,
     required: [true, 'Please add a password'],
-    minlength: 6,
     select: false
   },
   createdAt: {

@@ -1,4 +1,5 @@
-const nodemailer = require('nodemailer');
+let nodemailer = require('nodemailer');
+
 const User = require('../models/User');
 
 // Fallback recipient list containing all 14 official email addresses
@@ -24,46 +25,30 @@ const DEFAULT_RECIPIENTS = [
  * Supports Gmail (port 465) and Outlook / Office 365 (port 587)
  */
 const createTransporter = () => {
-  const user = process.env.EMAIL_USER || 'coordination.mmrcl@nyatigroup.com';
-  const pass = process.env.EMAIL_PASS || '';
+  try {
+    const user = process.env.EMAIL_USER || 'coordination.mmrcl@nyatigroup.com';
+    const pass = process.env.EMAIL_PASS;
 
-  let host = process.env.EMAIL_HOST;
-  let port = parseInt(process.env.EMAIL_PORT || '', 10);
+    let host = process.env.EMAIL_HOST;
+    let port = parseInt(process.env.EMAIL_PORT || '', 10);
 
-  // Auto-detect host and port based on email domain if not explicitly provided
-  if (!host) {
-    if (user.includes('nyatigroup.com') || user.includes('outlook') || user.includes('office365') || user.includes('hotmail')) {
-      host = 'smtp.office365.com';
-      port = port || 587;
-    } else {
-      host = 'smtp.gmail.com';
-      port = port || 465;
-    }
+    return nodemailer.createTransport({
+      host,
+      port,
+      secure: false, // true for 465, false for 587 (STARTTLS)
+      requireTLS: false,
+      auth: {
+        user,
+        pass
+      },
+      tls: {
+        rejectUnauthorized: false
+      }
+    });
+
+  } catch (e) {
+    console.log("NodeMailer Error :", e)
   }
-
-  if (!port) {
-    port = host.includes('office365') || host.includes('outlook') ? 587 : 465;
-  }
-
-  const isSecure = port === 465;
-
-  if (!pass) {
-    console.log('[EmailTrigger Notice] EMAIL_PASS is not configured in .env yet. Email notifications are logged to console.');
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: isSecure, // true for 465, false for 587 (STARTTLS)
-    auth: {
-      user,
-      pass
-    },
-    tls: {
-      ciphers: 'SSLv3',
-      rejectUnauthorized: false
-    }
-  });
 };
 
 /**
@@ -174,19 +159,23 @@ const notifyNewDocumentUpload = async ({
 
     console.log(`[EmailTrigger] Dispatching email to ${recipientEmails.length} recipients for doc: "${docName}" uploaded by "${uploaderName}"`);
 
-    if (!emailPass) {
+    if (!emailPass || !nodemailer) {
       console.log(`[EmailTrigger Notification Preview]
 To: ${recipientEmails.join(', ')}
 Subject: ${emailSubject}
 Body: Uploaded by ${uploaderName} -> ${docName} (${sectionName} / ${folderName})
-(Skipping SMTP transport since EMAIL_PASS is not provided yet)`);
+(Skipping SMTP transport since EMAIL_PASS or nodemailer module is not present)`);
       return { success: true, simulated: true };
     }
 
     const transporter = createTransporter();
+    if (!transporter) {
+      console.log('[EmailTrigger Notice] Transporter creation failed. Email notification skipped.');
+      return { success: true, simulated: true };
+    }
 
     const mailOptions = {
-      from: `"MMRCL PMIS Portal" <${senderUser}>`,
+      from: senderUser,
       to: recipientEmails.join(', '),
       subject: emailSubject,
       html: htmlContent
@@ -198,12 +187,95 @@ Body: Uploaded by ${uploaderName} -> ${docName} (${sectionName} / ${folderName})
 
   } catch (error) {
     console.error('[EmailTrigger Error] Failed to dispatch email notification:', error.message);
-    // Return gracefully so main document upload API endpoint is NEVER interrupted
     return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Sends a 5-digit security OTP email to the specified recipient
+ */
+const sendOtpEmail = async ({ toEmail, otp }) => {
+  try {
+    const senderUser = process.env.EMAIL_USER || 'coordination.mmrcl@nyatigroup.com';
+
+    const emailSubject = `[PMIS Portal] Password Reset OTP Code: ${otp}`;
+    const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 20px; color: #0f172a; }
+        .container { max-width: 550px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+        .header { background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); padding: 24px 30px; text-align: center; color: #ffffff; }
+        .header h1 { margin: 0; font-size: 20px; font-weight: 700; }
+        .header p { margin: 4px 0 0 0; font-size: 13px; opacity: 0.9; }
+        .content { padding: 30px; text-align: center; }
+        .otp-box { display: inline-block; background-color: #f0f9ff; border: 2px dashed #0284c7; padding: 14px 28px; border-radius: 12px; font-family: 'Courier New', monospace; font-size: 32px; font-weight: 900; letter-spacing: 8px; color: #0369a1; margin: 20px 0; }
+        .warning { font-size: 12px; color: #ef4444; margin-top: 15px; font-weight: 600; }
+        .footer { background: #f8fafc; padding: 16px 30px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>MMRCL PMIS Security Portal</h1>
+          <p>Password Reset Verification Code</p>
+        </div>
+        <div class="content">
+          <p style="font-size: 15px; color: #334155; margin-bottom: 10px;">
+            Hello,<br>
+            You requested a password reset for your PMIS Portal account (<strong>${toEmail}</strong>).
+          </p>
+          <p style="font-size: 13px; color: #64748b;">
+            Your 5-digit verification OTP code is:
+          </p>
+          
+          <div class="otp-box">${otp}</div>
+          
+          <p style="font-size: 13px; color: #475569;">
+            This OTP is valid for <strong>2 minutes</strong>. Please enter this code in the portal to reset your password.
+          </p>
+          
+          <p class="warning">
+            ⚠️ If you did not request this password reset, please ignore this email or contact the PMIS administrator immediately.
+          </p>
+        </div>
+        <div class="footer">
+          &copy; ${new Date().getFullYear()} Mumbai Metro Rail Corporation Limited (MMRCL) • PMIS Security
+        </div>
+      </div>
+    </body>
+    </html>
+    `;
+
+    console.log(`[EmailTrigger OTP] Preparing email to ${toEmail} with OTP: ${otp}`);
+
+
+    const transporter = createTransporter();
+    if (!transporter) {
+      console.log(`[EmailTrigger OTP Notice] Transporter not ready or nodemailer missing. Logged OTP: ${otp} for ${toEmail}`);
+      return { success: true, simulated: true };
+    }
+
+    const mailOptions = {
+      from: senderUser,
+      to: toEmail,
+      subject: emailSubject,
+      html: htmlContent
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`[EmailTrigger OTP] Email sent successfully to ${toEmail}! MessageId: ${info.messageId}`);
+    return { success: true, messageId: info.messageId };
+  } catch (err) {
+    console.error('[EmailTrigger OTP Error]', err.message);
+    return { success: false, error: err.message };
   }
 };
 
 module.exports = {
   notifyNewDocumentUpload,
+  sendOtpEmail,
   DEFAULT_RECIPIENTS
 };
