@@ -98,6 +98,52 @@ router.post('/folders', protect, async (req, res) => {
   }
 });
 
+// @desc    Rename a folder in a section
+// @route   PUT /folders/:id
+// @access  Private
+router.put('/folders/:id', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, message: 'Please provide folder name' });
+    }
+
+    const folder = await GeneralFolder.findOne({ _id: req.params.id, section });
+    if (!folder) {
+      return res.status(404).json({ success: false, message: 'Folder not found in this section' });
+    }
+
+    const newName = name.trim();
+    const existing = await GeneralFolder.findOne({
+      name: newName,
+      section,
+      parentFolder: folder.parentFolder,
+      _id: { $ne: folder._id }
+    });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'A folder with this name already exists in this location' });
+    }
+
+    const oldName = folder.name;
+    folder.name = newName;
+    await folder.save();
+
+    // Update any documents referencing this folder by string name
+    await GeneralDocument.updateMany(
+      { folder: oldName, section },
+      { folder: newName }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: folder
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 // @desc    Delete a folder and all its documents in a section
 // @route   DELETE /folders/:id
 // @access  Private (NECPL / Admin Only)
@@ -106,7 +152,8 @@ router.delete('/folders/:id', protect, async (req, res) => {
     const isFullRightsUser = req.user && (
       req.user.role === 'Site Engineer' ||
       (req.user.userId && req.user.userId.toUpperCase() === 'NECPL') ||
-      (req.user.email && req.user.email.toLowerCase().includes('necpl'))
+      (req.user.email && req.user.email.toLowerCase().includes('necpl')) ||
+      (req.user.email && req.user.email.toLowerCase() === 'coordination.mmrcl@nyatigroup.com')
     );
     if (!isFullRightsUser) {
       return res.status(403).json({ success: false, message: 'Delete rights are reserved exclusively for NECPL (Admin).' });
@@ -298,7 +345,8 @@ router.delete('/:id', protect, async (req, res) => {
     const isFullRightsUser = req.user && (
       req.user.role === 'Site Engineer' ||
       (req.user.userId && req.user.userId.toUpperCase() === 'NECPL') ||
-      (req.user.email && req.user.email.toLowerCase().includes('necpl'))
+      (req.user.email && req.user.email.toLowerCase().includes('necpl')) ||
+      (req.user.email && req.user.email.toLowerCase() === 'coordination.mmrcl@nyatigroup.com')
     );
     if (!isFullRightsUser) {
       return res.status(403).json({ success: false, message: 'Delete rights are reserved exclusively for NECPL (Admin).' });
@@ -755,7 +803,7 @@ router.delete('/:id/remark/:remarkId', protect, async (req, res) => {
 // Global baseline timestamp for notifications: Only documents uploaded after this feature timestamp show up in new upload notifications panel
 const notificationBaseline = new Date('2026-08-20T16:50:00.000Z');
 
-// @desc    Get all recently uploaded documents across all sections for notifications
+// @desc    Get all recent activity notifications across all sections (Uploads, Remarks, Approvals)
 // @route   GET /all-uploads
 // @access  Private
 router.get('/all-uploads', protect, async (req, res) => {
@@ -763,9 +811,9 @@ router.get('/all-uploads', protect, async (req, res) => {
     const documents = await GeneralDocument.find({
       uploadedAt: { $gte: notificationBaseline }
     })
-      .populate('uploadedBy', 'name role')
-      .sort({ uploadedAt: -1 })
-      .limit(50)
+      .populate('uploadedBy', 'name role userId')
+      .sort({ updatedAt: -1 })
+      .limit(60)
       .lean();
 
     // Map folder ObjectId to human-readable folder name
@@ -779,15 +827,93 @@ router.get('/all-uploads', protect, async (req, res) => {
       folderMap[f._id.toString()] = f.name;
     });
 
-    const data = documents.map(d => ({
-      ...d,
-      folderName: folderMap[d.folder] || d.folder
-    }));
+    const getHumanSectionName = (sec) => {
+      if (sec === 'tender') return 'Tender Documents';
+      if (sec === 'contractual') return 'Contractual Documents';
+      if (sec === 'monitor') return 'Project Monitoring & Control';
+      if (sec === 'drawing') return 'Project Drawings';
+      if (sec === 'quality') return 'Quality Management';
+      if (sec === 'ehs') return 'Environment, Health, and Safety (EHS)';
+      if (sec === 'mep') return 'MEP & IT';
+      if (sec === 'registrations') return 'Project Documents & Registration';
+      if (sec === 'approved_nocs') return 'Approval & NOCs';
+      if (sec === 'rfi') return 'RFI';
+      return sec || 'General';
+    };
+
+    const notifications = [];
+
+    documents.forEach(d => {
+      const folderName = folderMap[d.folder] || (d.folder && d.folder !== 'Root' ? d.folder : 'Root Folder');
+      const secName = getHumanSectionName(d.section);
+
+      // 1. New File Upload Event
+      notifications.push({
+        _id: d._id.toString(),
+        docId: d._id.toString(),
+        type: 'upload',
+        title: d.originalName || d.title || 'Untitled File',
+        name: d.originalName || d.title || 'Untitled File',
+        section: secName,
+        apiSection: d.section,
+        folderName: folderName,
+        uploader: d.uploadedBy?.name || d.uploadedBy?.userId || 'NECPL',
+        createdAt: d.uploadedAt || d.createdAt,
+        uploadedAt: d.uploadedAt || d.createdAt,
+        viewedBy: d.viewedBy || [],
+        docRef: d
+      });
+
+      // 2. Remarks Added Events
+      if (d.remarks && d.remarks.length > 0) {
+        d.remarks.forEach((rem, idx) => {
+          notifications.push({
+            _id: `${d._id.toString()}_rem_${rem._id || idx}`,
+            docId: d._id.toString(),
+            type: 'remark',
+            title: d.originalName || d.title || 'Untitled File',
+            name: d.originalName || d.title || 'Untitled File',
+            section: secName,
+            apiSection: d.section,
+            folderName: folderName,
+            uploader: rem.userName || rem.userRole || 'User',
+            remarkText: rem.text || '',
+            createdAt: rem.createdAt || d.updatedAt,
+            uploadedAt: rem.createdAt || d.updatedAt,
+            viewedBy: rem.readBy || d.viewedBy || [],
+            docRef: d
+          });
+        });
+      }
+
+      // 3. Approval Events
+      if (d.approvedBy && d.approvedBy.trim() !== '') {
+        notifications.push({
+          _id: `${d._id.toString()}_app`,
+          docId: d._id.toString(),
+          type: 'approval',
+          title: d.originalName || d.title || 'Untitled File',
+          name: d.originalName || d.title || 'Untitled File',
+          section: secName,
+          apiSection: d.section,
+          folderName: folderName,
+          uploader: d.approvedBy,
+          approvalStatus: d.approvalStatus || 'Approved',
+          createdAt: d.updatedAt || d.uploadedAt,
+          uploadedAt: d.updatedAt || d.uploadedAt,
+          viewedBy: d.viewedBy || [],
+          docRef: d
+        });
+      }
+    });
+
+    // Sort all notification items by createdAt / uploadedAt descending
+    notifications.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.status(200).json({
       success: true,
-      count: data.length,
-      data
+      count: notifications.length,
+      data: notifications
     });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -969,6 +1095,7 @@ router.put('/:id/approval-authority', protect, async (req, res) => {
 });
 
 // @desc    Approve document
+// @desc    Approve document
 // @route   POST /:id/approve
 // @access  Private
 router.post('/:id/approve', protect, async (req, res) => {
@@ -991,12 +1118,31 @@ router.post('/:id/approve', protect, async (req, res) => {
     const userOrg = (user.organization || '').toUpperCase();
     const userRole = (user.role || '').toUpperCase();
 
-    const matchedAuth = authList.find(authUpper =>
-      userName.includes(authUpper) ||
-      userId.includes(authUpper) ||
-      userOrg.includes(authUpper) ||
-      userRole.includes(authUpper)
-    );
+    // Check matched authority
+    let matchedAuth = authList.find(authUpper => {
+      if (userRole.includes('ADMIN') || userId === 'ADMIN' || userId === 'NECPL' || userOrg.includes('NECPL')) return true;
+      if (authUpper.includes('KULKARNI') || authUpper.includes('MADHAVESH')) {
+        return userName.includes('PMC') || userName.includes('MADHAVESH') || userName.includes('KULKARNI') || userOrg.includes('PMC') || userId.includes('PMC');
+      }
+      if (authUpper.includes('VISHWAS') || authUpper.includes('AJNALKAR')) {
+        return userName.includes('VISHWAS') || userName.includes('AJNALKAR') || userOrg.includes('MMRCL') || userId.includes('MMRCL');
+      }
+      if (authUpper.includes('AASIM') || authUpper.includes('SULAIMAN')) {
+        return userName.includes('AASIM') || userName.includes('SULAIMAN') || userOrg.includes('MMRCL') || userId.includes('MMRCL');
+      }
+      if (authUpper.includes('PATIL') || authUpper.includes('RAJESH')) {
+        return userName.includes('RAJESH') || userName.includes('PATIL') || userOrg.includes('MMRCL') || userId.includes('MMRCL');
+      }
+      if (authUpper.includes('SACHIN') || authUpper.includes('AHER')) {
+        return userName.includes('SACHIN') || userName.includes('AHER') || userOrg.includes('MMRCL') || userId.includes('MMRCL');
+      }
+      return (
+        userName.includes(authUpper) ||
+        userId.includes(authUpper) ||
+        userOrg.includes(authUpper) ||
+        userRole.includes(authUpper)
+      );
+    });
 
     if (!matchedAuth) {
       return res.status(403).json({
@@ -1006,18 +1152,189 @@ router.post('/:id/approve', protect, async (req, res) => {
     }
 
     const originalAuthList = authority.split(',').map(a => a.trim()).filter(Boolean);
-    const matchedOriginalAuth = originalAuthList.find(a => a.toUpperCase() === matchedAuth);
+    let matchedOriginalAuth = originalAuthList.find(a => a.toUpperCase() === matchedAuth);
+    if (!matchedOriginalAuth) {
+      // If user matched generally (e.g. MMRCL or PMC or Admin or Architect)
+      if (userName.includes('PRIYADARSHINI') || userName.includes('AGRAWAL') || userOrg.includes('ARCHITECT')) matchedOriginalAuth = 'Architect - Ar. Priyadarshini Agrawal';
+      else if (userName.includes('VISHWAS') || userName.includes('AJNALKAR')) matchedOriginalAuth = 'MMRCL - Dr. Vishwas Ajnalkar';
+      else if (userName.includes('AASIM') || userName.includes('SULAIMAN')) matchedOriginalAuth = 'MMRCL - Md Aasim Sulaiman';
+      else if (userName.includes('RAJESH') || userName.includes('PATIL')) matchedOriginalAuth = 'MMRCL - Mr Rajesh Patil';
+      else if (userName.includes('SACHIN') || userName.includes('AHER')) matchedOriginalAuth = 'MMRCL - Mr Sachin Aher';
+      else if (userOrg.includes('MMRCL') || userId.includes('MMRCL')) {
+        matchedOriginalAuth = originalAuthList.find(a => a.includes('MMRCL')) || 'MMRCL';
+      } else if (userOrg.includes('PMC') || userId.includes('PMC')) {
+        matchedOriginalAuth = originalAuthList.find(a => a.includes('PMC')) || 'PMC - Mr. Madhavesh Kulkarni';
+      } else {
+        matchedOriginalAuth = originalAuthList[0];
+      }
+    }
 
     let currentApprovedArray = document.approvedBy ? document.approvedBy.split(',').map(a => a.trim()).filter(Boolean) : [];
+
+    // Sequential approval check: Project Drawings vs MEP vs RFI vs Project Monitoring & Control
+    if (section === 'project_drawings' || section === 'drawings' || (authority.includes('Architect') && authority.includes('Vikrant'))) {
+      const hasArchAssigned = originalAuthList.some(a => a.includes('Architect') || a.includes('Agrawal'));
+      const hasArchApproved = currentApprovedArray.some(a => a.includes('Architect') || a.includes('Agrawal'));
+
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVikrantAssigned = originalAuthList.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+      const hasVikrantApproved = currentApprovedArray.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+
+      if (matchedOriginalAuth.includes('PMC') && hasArchAssigned && !hasArchApproved) {
+        return res.status(403).json({ success: false, message: 'Architect - Ar. Priyadarshini Agrawal must approve first before PMC can approve.' });
+      }
+
+      if ((matchedOriginalAuth.includes('Vikrant') || matchedOriginalAuth.includes('Tewathia')) && ((hasArchAssigned && !hasArchApproved) || (hasPmcAssigned && !hasPmcApproved))) {
+        return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first before MMRCL - Mr Vikrant Tewathia can approve.' });
+      }
+
+      const isFinalMmrclOfficer = matchedOriginalAuth.includes('MMRCL') && !matchedOriginalAuth.includes('Vikrant') && !matchedOriginalAuth.includes('Tewathia');
+      if (isFinalMmrclOfficer) {
+        if (hasArchAssigned && !hasArchApproved) return res.status(403).json({ success: false, message: 'Architect - Ar. Priyadarshini Agrawal must approve first.' });
+        if (hasPmcAssigned && !hasPmcApproved) return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first.' });
+        if (hasVikrantAssigned && !hasVikrantApproved) return res.status(403).json({ success: false, message: 'MMRCL - Mr Vikrant Tewathia must approve first before final MMRCL approval.' });
+      }
+    } else if (section === 'rfi') {
+      const hasArchAssigned = originalAuthList.some(a => a.includes('Architect') || a.includes('Agrawal') || a.includes('Priyadarshini'));
+      const hasArchApproved = currentApprovedArray.some(a => a.includes('Architect') || a.includes('Agrawal') || a.includes('Priyadarshini'));
+
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      if (matchedOriginalAuth.includes('PMC') && hasArchAssigned && !hasArchApproved) {
+        return res.status(403).json({ success: false, message: 'Architect - Ar. Priyadarshini Agrawal must approve first before PMC can approve.' });
+      }
+
+      if (matchedOriginalAuth.includes('MMRCL')) {
+        if (hasArchAssigned && !hasArchApproved) return res.status(403).json({ success: false, message: 'Architect - Ar. Priyadarshini Agrawal must approve first.' });
+        if (hasPmcAssigned && !hasPmcApproved) return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first.' });
+      }
+    } else if (section === 'mep' || authority.includes('Vishwas') || authority.includes('Ajnalkar')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVishwasAssigned = originalAuthList.some(a => a.includes('Vishwas') || a.includes('Ajnalkar'));
+      const hasVishwasApproved = currentApprovedArray.some(a => a.includes('Vishwas') || a.includes('Ajnalkar'));
+
+      if ((matchedOriginalAuth.includes('Vishwas') || matchedOriginalAuth.includes('Ajnalkar')) && hasPmcAssigned && !hasPmcApproved) {
+        return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first before MMRCL - Dr. Vishwas Ajnalkar can approve.' });
+      }
+
+      const isFinalMmrclOfficer = matchedOriginalAuth.includes('MMRCL') && !matchedOriginalAuth.includes('Vishwas') && !matchedOriginalAuth.includes('Ajnalkar');
+      if (isFinalMmrclOfficer) {
+        if (hasPmcAssigned && !hasPmcApproved) return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first.' });
+        if (hasVishwasAssigned && !hasVishwasApproved) return res.status(403).json({ success: false, message: 'MMRCL - Dr. Vishwas Ajnalkar must approve first before final MMRCL approval.' });
+      }
+    } else if (section === 'project_monitoring_control' || section === 'pmc' || section === 'quality_management' || section === 'quality' || section === 'ehs' || section === 'environment_health_safety' || authority.includes('PMC')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      if (matchedOriginalAuth.includes('MMRCL') && hasPmcAssigned && !hasPmcApproved) {
+        return res.status(403).json({
+          success: false,
+          message: 'PMC - Mr. Madhavesh Kulkarni must approve first before MMRCL can approve.'
+        });
+      }
+    }
+
     if (matchedOriginalAuth && !currentApprovedArray.includes(matchedOriginalAuth)) {
       currentApprovedArray.push(matchedOriginalAuth);
     }
 
     document.approvedBy = currentApprovedArray.join(', ');
 
-    const isFullyApproved = originalAuthList.every(a => currentApprovedArray.includes(a));
-    if (isFullyApproved) {
-      document.approvalStatus = 'Approved';
+    // Check full approval completion
+    if (section === 'project_drawings' || section === 'drawings' || authority.includes('Architect') || authority.includes('Agrawal')) {
+      const hasArchAssigned = originalAuthList.some(a => a.includes('Architect') || a.includes('Agrawal'));
+      const hasArchApproved = currentApprovedArray.some(a => a.includes('Architect') || a.includes('Agrawal'));
+
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVikrantAssigned = originalAuthList.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+      const hasVikrantApproved = currentApprovedArray.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+
+      const finalMmrclAssigned = originalAuthList.filter(a => a.includes('MMRCL') && !a.includes('Vikrant') && !a.includes('Tewathia'));
+      const hasFinalMmrclApproved = finalMmrclAssigned.length > 0 ? currentApprovedArray.some(a => a.includes('MMRCL') && !a.includes('Vikrant') && !a.includes('Tewathia')) : true;
+
+      const archOk = !hasArchAssigned || hasArchApproved;
+      const pmcOk = !hasPmcAssigned || hasPmcApproved;
+      const vikrantOk = !hasVikrantAssigned || hasVikrantApproved;
+
+      if (archOk && pmcOk && vikrantOk && hasFinalMmrclApproved) {
+        document.approvalStatus = 'Approved';
+      }
+    } else if (section === 'mep' || authority.includes('Vishwas') || authority.includes('Ajnalkar')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVishwasAssigned = originalAuthList.some(a => a.includes('Vishwas') || a.includes('Ajnalkar'));
+      const hasVishwasApproved = currentApprovedArray.some(a => a.includes('Vishwas') || a.includes('Ajnalkar'));
+
+      const finalMmrclAssigned = originalAuthList.filter(a => a.includes('MMRCL') && !a.includes('Vishwas') && !a.includes('Ajnalkar'));
+      const hasFinalMmrclApproved = finalMmrclAssigned.length > 0 ? currentApprovedArray.some(a => a.includes('MMRCL') && !a.includes('Vishwas') && !a.includes('Ajnalkar')) : true;
+
+      const pmcOk = !hasPmcAssigned || hasPmcApproved;
+      const vishwasOk = !hasVishwasAssigned || hasVishwasApproved;
+
+      if (pmcOk && vishwasOk && hasFinalMmrclApproved) {
+        document.approvalStatus = 'Approved';
+      }
+    } else if (section === 'project_monitoring_control' || section === 'pmc' || section === 'quality_management' || section === 'quality' || section === 'ehs' || section === 'environment_health_safety' || authority.includes('PMC')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      if (matchedOriginalAuth.includes('MMRCL') && hasPmcAssigned && !hasPmcApproved) {
+        return res.status(403).json({
+          success: false,
+          message: 'PMC - Mr. Madhavesh Kulkarni must approve first before MMRCL can approve.'
+        });
+      }
+    }
+
+    if (matchedOriginalAuth && !currentApprovedArray.includes(matchedOriginalAuth)) {
+      currentApprovedArray.push(matchedOriginalAuth);
+    }
+
+    document.approvedBy = currentApprovedArray.join(', ');
+
+    // Check full approval completion
+    if (section === 'project_drawings' || section === 'drawings' || authority.includes('Architect') || authority.includes('Agrawal')) {
+      const hasArchAssigned = originalAuthList.some(a => a.includes('Architect') || a.includes('Agrawal'));
+      const hasArchApproved = currentApprovedArray.some(a => a.includes('Architect') || a.includes('Agrawal'));
+
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVikrantAssigned = originalAuthList.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+      const hasVikrantApproved = currentApprovedArray.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+
+      const finalMmrclAssigned = originalAuthList.filter(a => a.includes('MMRCL') && !a.includes('Vikrant') && !a.includes('Tewathia'));
+      const hasFinalMmrclApproved = finalMmrclAssigned.length > 0 ? currentApprovedArray.some(a => a.includes('MMRCL') && !a.includes('Vikrant') && !a.includes('Tewathia')) : true;
+
+      const archOk = !hasArchAssigned || hasArchApproved;
+      const pmcOk = !hasPmcAssigned || hasPmcApproved;
+      const vikrantOk = !hasVikrantAssigned || hasVikrantApproved;
+
+      if (archOk && pmcOk && vikrantOk && hasFinalMmrclApproved) {
+        document.approvalStatus = 'Approved';
+      }
+    } else if (section === 'project_monitoring_control' || section === 'pmc' || section === 'quality_management' || section === 'quality' || section === 'ehs' || section === 'environment_health_safety' || authority.includes('PMC')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+      const mmrclAssigned = originalAuthList.filter(a => a.includes('MMRCL'));
+      const hasMmrclApproved = mmrclAssigned.length > 0 ? currentApprovedArray.some(a => a.includes('MMRCL')) : true;
+
+      if ((!hasPmcAssigned || hasPmcApproved) && hasMmrclApproved) {
+        document.approvalStatus = 'Approved';
+      }
+    } else {
+      const isFullyApproved = originalAuthList.every(a => currentApprovedArray.includes(a));
+      if (isFullyApproved) {
+        document.approvalStatus = 'Approved';
+      }
     }
 
     await document.save();
@@ -1090,12 +1407,30 @@ router.post('/:id/sub-document/:subId/approve', protect, async (req, res) => {
     const userOrg = (user.organization || '').toUpperCase();
     const userRole = (user.role || '').toUpperCase();
 
-    const matchedAuth = authList.find(authUpper =>
-      userName.includes(authUpper) ||
-      userId.includes(authUpper) ||
-      userOrg.includes(authUpper) ||
-      userRole.includes(authUpper)
-    );
+    let matchedAuth = authList.find(authUpper => {
+      if (userRole.includes('ADMIN') || userId === 'ADMIN' || userId === 'NECPL' || userOrg.includes('NECPL')) return true;
+      if (authUpper.includes('KULKARNI') || authUpper.includes('MADHAVESH')) {
+        return userName.includes('PMC') || userName.includes('MADHAVESH') || userName.includes('KULKARNI') || userOrg.includes('PMC') || userId.includes('PMC');
+      }
+      if (authUpper.includes('VISHWAS') || authUpper.includes('AJNALKAR')) {
+        return userName.includes('VISHWAS') || userName.includes('AJNALKAR') || userOrg.includes('MMRCL') || userId.includes('MMRCL');
+      }
+      if (authUpper.includes('AASIM') || authUpper.includes('SULAIMAN')) {
+        return userName.includes('AASIM') || userName.includes('SULAIMAN') || userOrg.includes('MMRCL') || userId.includes('MMRCL');
+      }
+      if (authUpper.includes('PATIL') || authUpper.includes('RAJESH')) {
+        return userName.includes('RAJESH') || userName.includes('PATIL') || userOrg.includes('MMRCL') || userId.includes('MMRCL');
+      }
+      if (authUpper.includes('SACHIN') || authUpper.includes('AHER')) {
+        return userName.includes('SACHIN') || userName.includes('AHER') || userOrg.includes('MMRCL') || userId.includes('MMRCL');
+      }
+      return (
+        userName.includes(authUpper) ||
+        userId.includes(authUpper) ||
+        userOrg.includes(authUpper) ||
+        userRole.includes(authUpper)
+      );
+    });
 
     if (!matchedAuth) {
       return res.status(403).json({
@@ -1105,18 +1440,188 @@ router.post('/:id/sub-document/:subId/approve', protect, async (req, res) => {
     }
 
     const originalAuthList = authority.split(',').map(a => a.trim()).filter(Boolean);
-    const matchedOriginalAuth = originalAuthList.find(a => a.toUpperCase() === matchedAuth);
+    let matchedOriginalAuth = originalAuthList.find(a => a.toUpperCase() === matchedAuth);
+    if (!matchedOriginalAuth) {
+      if (userName.includes('PRIYADARSHINI') || userName.includes('AGRAWAL') || userOrg.includes('ARCHITECT')) matchedOriginalAuth = 'Architect - Ar. Priyadarshini Agrawal';
+      else if (userName.includes('VISHWAS') || userName.includes('AJNALKAR')) matchedOriginalAuth = 'MMRCL - Dr. Vishwas Ajnalkar';
+      else if (userName.includes('AASIM') || userName.includes('SULAIMAN')) matchedOriginalAuth = 'MMRCL - Md Aasim Sulaiman';
+      else if (userName.includes('RAJESH') || userName.includes('PATIL')) matchedOriginalAuth = 'MMRCL - Mr Rajesh Patil';
+      else if (userName.includes('SACHIN') || userName.includes('AHER')) matchedOriginalAuth = 'MMRCL - Mr Sachin Aher';
+      else if (userOrg.includes('MMRCL') || userId.includes('MMRCL')) {
+        matchedOriginalAuth = originalAuthList.find(a => a.includes('MMRCL')) || 'MMRCL';
+      } else if (userOrg.includes('PMC') || userId.includes('PMC')) {
+        matchedOriginalAuth = originalAuthList.find(a => a.includes('PMC')) || 'PMC - Mr. Madhavesh Kulkarni';
+      } else {
+        matchedOriginalAuth = originalAuthList[0];
+      }
+    }
 
     let currentApprovedArray = subDoc.approvedBy ? subDoc.approvedBy.split(',').map(a => a.trim()).filter(Boolean) : [];
+
+    // Sequential approval check: Project Drawings vs MEP vs RFI vs Project Monitoring & Control
+    if (section === 'project_drawings' || section === 'drawings' || (authority.includes('Architect') && authority.includes('Vikrant'))) {
+      const hasArchAssigned = originalAuthList.some(a => a.includes('Architect') || a.includes('Agrawal'));
+      const hasArchApproved = currentApprovedArray.some(a => a.includes('Architect') || a.includes('Agrawal'));
+
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVikrantAssigned = originalAuthList.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+      const hasVikrantApproved = currentApprovedArray.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+
+      if (matchedOriginalAuth.includes('PMC') && hasArchAssigned && !hasArchApproved) {
+        return res.status(403).json({ success: false, message: 'Architect - Ar. Priyadarshini Agrawal must approve first before PMC can approve.' });
+      }
+
+      if ((matchedOriginalAuth.includes('Vikrant') || matchedOriginalAuth.includes('Tewathia')) && ((hasArchAssigned && !hasArchApproved) || (hasPmcAssigned && !hasPmcApproved))) {
+        return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first before MMRCL - Mr Vikrant Tewathia can approve.' });
+      }
+
+      const isFinalMmrclOfficer = matchedOriginalAuth.includes('MMRCL') && !matchedOriginalAuth.includes('Vikrant') && !matchedOriginalAuth.includes('Tewathia');
+      if (isFinalMmrclOfficer) {
+        if (hasArchAssigned && !hasArchApproved) return res.status(403).json({ success: false, message: 'Architect - Ar. Priyadarshini Agrawal must approve first.' });
+        if (hasPmcAssigned && !hasPmcApproved) return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first.' });
+        if (hasVikrantAssigned && !hasVikrantApproved) return res.status(403).json({ success: false, message: 'MMRCL - Mr Vikrant Tewathia must approve first before final MMRCL approval.' });
+      }
+    } else if (section === 'rfi') {
+      const hasArchAssigned = originalAuthList.some(a => a.includes('Architect') || a.includes('Agrawal') || a.includes('Priyadarshini'));
+      const hasArchApproved = currentApprovedArray.some(a => a.includes('Architect') || a.includes('Agrawal') || a.includes('Priyadarshini'));
+
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      if (matchedOriginalAuth.includes('PMC') && hasArchAssigned && !hasArchApproved) {
+        return res.status(403).json({ success: false, message: 'Architect - Ar. Priyadarshini Agrawal must approve first before PMC can approve.' });
+      }
+
+      if (matchedOriginalAuth.includes('MMRCL')) {
+        if (hasArchAssigned && !hasArchApproved) return res.status(403).json({ success: false, message: 'Architect - Ar. Priyadarshini Agrawal must approve first.' });
+        if (hasPmcAssigned && !hasPmcApproved) return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first.' });
+      }
+    } else if (section === 'mep' || authority.includes('Vishwas') || authority.includes('Ajnalkar')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVishwasAssigned = originalAuthList.some(a => a.includes('Vishwas') || a.includes('Ajnalkar'));
+      const hasVishwasApproved = currentApprovedArray.some(a => a.includes('Vishwas') || a.includes('Ajnalkar'));
+
+      if ((matchedOriginalAuth.includes('Vishwas') || matchedOriginalAuth.includes('Ajnalkar')) && hasPmcAssigned && !hasPmcApproved) {
+        return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first before MMRCL - Dr. Vishwas Ajnalkar can approve.' });
+      }
+
+      const isFinalMmrclOfficer = matchedOriginalAuth.includes('MMRCL') && !matchedOriginalAuth.includes('Vishwas') && !matchedOriginalAuth.includes('Ajnalkar');
+      if (isFinalMmrclOfficer) {
+        if (hasPmcAssigned && !hasPmcApproved) return res.status(403).json({ success: false, message: 'PMC - Mr. Madhavesh Kulkarni must approve first.' });
+        if (hasVishwasAssigned && !hasVishwasApproved) return res.status(403).json({ success: false, message: 'MMRCL - Dr. Vishwas Ajnalkar must approve first before final MMRCL approval.' });
+      }
+    } else if (section === 'project_monitoring_control' || section === 'pmc' || section === 'quality_management' || section === 'quality' || section === 'ehs' || section === 'environment_health_safety' || authority.includes('PMC')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      if (matchedOriginalAuth.includes('MMRCL') && hasPmcAssigned && !hasPmcApproved) {
+        return res.status(403).json({
+          success: false,
+          message: 'PMC - Mr. Madhavesh Kulkarni must approve first before MMRCL can approve.'
+        });
+      }
+    }
+
     if (matchedOriginalAuth && !currentApprovedArray.includes(matchedOriginalAuth)) {
       currentApprovedArray.push(matchedOriginalAuth);
     }
 
     subDoc.approvedBy = currentApprovedArray.join(', ');
 
-    const isFullyApproved = originalAuthList.every(a => currentApprovedArray.includes(a));
-    if (isFullyApproved) {
-      subDoc.approvalStatus = 'Approved';
+    // Check full approval completion
+    if (section === 'project_drawings' || section === 'drawings' || authority.includes('Architect') || authority.includes('Agrawal')) {
+      const hasArchAssigned = originalAuthList.some(a => a.includes('Architect') || a.includes('Agrawal'));
+      const hasArchApproved = currentApprovedArray.some(a => a.includes('Architect') || a.includes('Agrawal'));
+
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVikrantAssigned = originalAuthList.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+      const hasVikrantApproved = currentApprovedArray.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+
+      const finalMmrclAssigned = originalAuthList.filter(a => a.includes('MMRCL') && !a.includes('Vikrant') && !a.includes('Tewathia'));
+      const hasFinalMmrclApproved = finalMmrclAssigned.length > 0 ? currentApprovedArray.some(a => a.includes('MMRCL') && !a.includes('Vikrant') && !a.includes('Tewathia')) : true;
+
+      const archOk = !hasArchAssigned || hasArchApproved;
+      const pmcOk = !hasPmcAssigned || hasPmcApproved;
+      const vikrantOk = !hasVikrantAssigned || hasVikrantApproved;
+
+      if (archOk && pmcOk && vikrantOk && hasFinalMmrclApproved) {
+        subDoc.approvalStatus = 'Approved';
+      }
+    } else if (section === 'mep' || authority.includes('Vishwas') || authority.includes('Ajnalkar')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVishwasAssigned = originalAuthList.some(a => a.includes('Vishwas') || a.includes('Ajnalkar'));
+      const hasVishwasApproved = currentApprovedArray.some(a => a.includes('Vishwas') || a.includes('Ajnalkar'));
+
+      const finalMmrclAssigned = originalAuthList.filter(a => a.includes('MMRCL') && !a.includes('Vishwas') && !a.includes('Ajnalkar'));
+      const hasFinalMmrclApproved = finalMmrclAssigned.length > 0 ? currentApprovedArray.some(a => a.includes('MMRCL') && !a.includes('Vishwas') && !a.includes('Ajnalkar')) : true;
+
+      const pmcOk = !hasPmcAssigned || hasPmcApproved;
+      const vishwasOk = !hasVishwasAssigned || hasVishwasApproved;
+
+      if (pmcOk && vishwasOk && hasFinalMmrclApproved) {
+        subDoc.approvalStatus = 'Approved';
+      }
+    } else if (section === 'project_monitoring_control' || section === 'pmc' || section === 'quality_management' || section === 'quality' || section === 'ehs' || section === 'environment_health_safety' || authority.includes('PMC')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      if (matchedOriginalAuth.includes('MMRCL') && hasPmcAssigned && !hasPmcApproved) {
+        return res.status(403).json({
+          success: false,
+          message: 'PMC - Mr. Madhavesh Kulkarni must approve first before MMRCL can approve.'
+        });
+      }
+    }
+
+    if (matchedOriginalAuth && !currentApprovedArray.includes(matchedOriginalAuth)) {
+      currentApprovedArray.push(matchedOriginalAuth);
+    }
+
+    subDoc.approvedBy = currentApprovedArray.join(', ');
+
+    // Check full approval completion
+    if (section === 'project_drawings' || section === 'drawings' || authority.includes('Architect') || authority.includes('Agrawal')) {
+      const hasArchAssigned = originalAuthList.some(a => a.includes('Architect') || a.includes('Agrawal'));
+      const hasArchApproved = currentApprovedArray.some(a => a.includes('Architect') || a.includes('Agrawal'));
+
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+
+      const hasVikrantAssigned = originalAuthList.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+      const hasVikrantApproved = currentApprovedArray.some(a => a.includes('Vikrant') || a.includes('Tewathia'));
+
+      const finalMmrclAssigned = originalAuthList.filter(a => a.includes('MMRCL') && !a.includes('Vikrant') && !a.includes('Tewathia'));
+      const hasFinalMmrclApproved = finalMmrclAssigned.length > 0 ? currentApprovedArray.some(a => a.includes('MMRCL') && !a.includes('Vikrant') && !a.includes('Tewathia')) : true;
+
+      const archOk = !hasArchAssigned || hasArchApproved;
+      const pmcOk = !hasPmcAssigned || hasPmcApproved;
+      const vikrantOk = !hasVikrantAssigned || hasVikrantApproved;
+
+      if (archOk && pmcOk && vikrantOk && hasFinalMmrclApproved) {
+        subDoc.approvalStatus = 'Approved';
+      }
+    } else if (section === 'project_monitoring_control' || section === 'pmc' || section === 'quality_management' || section === 'quality' || section === 'ehs' || section === 'environment_health_safety' || authority.includes('PMC')) {
+      const hasPmcAssigned = originalAuthList.some(a => a.includes('PMC'));
+      const hasPmcApproved = currentApprovedArray.some(a => a.includes('PMC'));
+      const mmrclAssigned = originalAuthList.filter(a => a.includes('MMRCL'));
+      const hasMmrclApproved = mmrclAssigned.length > 0 ? currentApprovedArray.some(a => a.includes('MMRCL')) : true;
+
+      if ((!hasPmcAssigned || hasPmcApproved) && hasMmrclApproved) {
+        subDoc.approvalStatus = 'Approved';
+      }
+    } else {
+      const isFullyApproved = originalAuthList.every(a => currentApprovedArray.includes(a));
+      if (isFullyApproved) {
+        subDoc.approvalStatus = 'Approved';
+      }
     }
 
     await document.save();
