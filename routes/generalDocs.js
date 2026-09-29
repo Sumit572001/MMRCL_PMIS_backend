@@ -26,8 +26,7 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({
-  storage: storage,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+  storage: storage
 });
 
 // Default folders for different sections

@@ -29,20 +29,23 @@ const createTransporter = () => {
     const user = process.env.EMAIL_USER || 'coordination.mmrcl@nyatigroup.com';
     const pass = process.env.EMAIL_PASS;
 
-    let host = process.env.EMAIL_HOST;
-    let port = parseInt(process.env.EMAIL_PORT || '', 10);
+    let host = process.env.EMAIL_HOST || 'smtp.office365.com';
+    let port = parseInt(process.env.EMAIL_PORT || '587', 10);
+
+    console.log(`[EmailService] Using SMTP → host: ${host}, port: ${port}, user: ${user}`);
 
     return nodemailer.createTransport({
       host,
       port,
-      secure: false, // true for 465, false for 587 (STARTTLS)
-      requireTLS: false,
+      secure: false,       // false for 587 (STARTTLS), true for 465 (SSL)
+      requireTLS: true,    // Force STARTTLS on port 587
       auth: {
         user,
         pass
       },
       tls: {
-        rejectUnauthorized: false
+        rejectUnauthorized: false,
+        ciphers: 'SSLv3'
       }
     });
 

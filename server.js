@@ -191,8 +191,8 @@ const app = express();
 
 // Middleware
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '2gb' }));
+app.use(express.urlencoded({ limit: '2gb', extended: true }));
 
 // Create uploads directory if it doesn't exist
 const uploadDir = process.env.UPLOAD_DIR || 'uploads';
@@ -301,6 +301,8 @@ const PORT = process.env.PORT || 5005;
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`PMIS Backend Server running on port ${PORT} (0.0.0.0)`);
 });
+server.timeout = 30 * 60 * 1000; // 30 minutes timeout for large file uploads
+server.keepAliveTimeout = 30 * 60 * 1000;
 
 process.on('unhandledRejection', (err, promise) => {
   console.error(`Error: ${err.message}`);

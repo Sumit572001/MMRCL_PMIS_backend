@@ -24,8 +24,7 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({
-  storage: storage,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+  storage: storage
 });
 
 // @desc    Get all tender folders (auto seeds default list on first request)
