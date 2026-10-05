@@ -164,7 +164,9 @@ router.post('/', protect, authorize('Contractor'), upload.single('file'), async 
       sectionName: 'Submittals & Documents',
       folderName: matrixItem ? matrixItem.name : 'Submittals',
       originalFileName: req.file.originalname,
-      uploadedAt: document.createdAt
+      uploadedAt: document.createdAt,
+      docId: document._id.toString(),
+      docType: 'submittal'
     }).catch(err => console.error('[EmailTrigger Error]', err));
 
     res.status(201).json({
@@ -243,7 +245,9 @@ router.post('/:id/version', protect, authorize('Contractor'), upload.single('fil
       sectionName: 'Submittals & Documents',
       folderName: 'Submittal Revisions',
       originalFileName: req.file.originalname,
-      uploadedAt: new Date()
+      uploadedAt: new Date(),
+      docId: document._id.toString(),
+      docType: 'submittal'
     }).catch(err => console.error('[EmailTrigger Error]', err));
 
     res.status(200).json({

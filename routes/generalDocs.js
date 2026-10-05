@@ -225,6 +225,24 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
+// @desc    Get single document by ID across any section
+// @route   GET /doc-by-id/:id
+// @access  Private
+router.get('/doc-by-id/:id', protect, async (req, res) => {
+  try {
+    const document = await GeneralDocument.findById(req.params.id).populate('uploadedBy', 'name role');
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 // @desc    Upload new document in a section
 // @route   POST /
 // @access  Private (All Authenticated Users)
@@ -276,7 +294,9 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       sectionName: section,
       folderName: folder,
       originalFileName: req.file.originalname,
-      uploadedAt: document.uploadedAt
+      uploadedAt: document.uploadedAt,
+      docId: document._id.toString(),
+      docType: 'general'
     }).catch(err => console.error('[EmailTrigger Error]', err));
 
     res.status(201).json({
@@ -526,7 +546,9 @@ router.post('/:id/sub-document', protect, upload.single('file'), async (req, res
       sectionName: section,
       folderName: document.folder || 'Sub-Document',
       originalFileName: req.file.originalname,
-      uploadedAt: subDoc.uploadedAt
+      uploadedAt: subDoc.uploadedAt,
+      docId: document._id.toString(),
+      docType: 'general'
     }).catch(err => console.error('[EmailTrigger Error]', err));
 
     res.status(201).json({

@@ -20,6 +20,11 @@ const DEFAULT_RECIPIENTS = [
   'coordination.mmrcl@nyatigroup.com'
 ];
 
+// Excluded / Blocked email addresses that should NOT receive automated document upload notifications
+const EXCLUDED_RECIPIENTS = [
+  'rajeev.kumar@mmrcl.com'
+];
+
 /**
  * Creates Nodemailer Transporter using environment variables
  * Supports Gmail (port 465) and Outlook / Office 365 (port 587)
@@ -63,7 +68,9 @@ const notifyNewDocumentUpload = async ({
   sectionName = 'General Documents',
   folderName = 'Root',
   originalFileName = '',
-  uploadedAt = new Date()
+  uploadedAt = new Date(),
+  docId = '',
+  docType = 'general'
 }) => {
   try {
     // Collect all registered email addresses from Database
@@ -76,6 +83,11 @@ const notifyNewDocumentUpload = async ({
       console.warn('[EmailTrigger] Could not fetch DB emails, using fallback list:', dbErr.message);
     }
 
+    // Exclude blocked / unsubscribed recipients (e.g. Rajeev Kumar: rajeev.kumar@mmrcl.com)
+    recipientEmails = recipientEmails.filter(
+      email => !EXCLUDED_RECIPIENTS.some(ex => ex.toLowerCase() === email.trim().toLowerCase())
+    );
+
     const senderUser = process.env.EMAIL_USER || 'arch.mmrcl@gmail.com';
     const emailPass = process.env.EMAIL_PASS || '';
 
@@ -84,6 +96,11 @@ const notifyNewDocumentUpload = async ({
       dateStyle: 'medium',
       timeStyle: 'short'
     });
+
+    const portalBaseUrl = process.env.PORTAL_URL || 'http://localhost:3000';
+    const viewButtonUrl = docId
+      ? `${portalBaseUrl}?openDocId=${docId}&docType=${docType}&section=${encodeURIComponent(sectionName)}`
+      : portalBaseUrl;
 
     const emailSubject = `[PMIS Notification] New Document Uploaded: ${docName}`;
 
@@ -148,8 +165,14 @@ const notifyNewDocumentUpload = async ({
             </tr>
           </table>
 
-          <p style="font-size: 13px; color: #64748b; line-height: 1.5;">
-            Please log in to the PMIS Portal to view, download, or review this document.
+          <div style="text-align: center; margin: 28px 0 20px 0;">
+            <a href="${viewButtonUrl}" target="_blank" style="display: inline-block; background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); color: #ffffff; text-decoration: none; font-weight: 700; font-size: 15px; padding: 14px 32px; border-radius: 10px; box-shadow: 0 4px 14px rgba(2, 132, 199, 0.4); letter-spacing: 0.3px;">
+              📂 Open & View Document on PMIS Portal
+            </a>
+          </div>
+
+          <p style="font-size: 13px; color: #64748b; line-height: 1.5; text-align: center;">
+            Click the button above or log in to the PMIS Portal to view, download, or review this document directly.
           </p>
         </div>
         <div class="footer">
@@ -280,5 +303,6 @@ const sendOtpEmail = async ({ toEmail, otp }) => {
 module.exports = {
   notifyNewDocumentUpload,
   sendOtpEmail,
-  DEFAULT_RECIPIENTS
+  DEFAULT_RECIPIENTS,
+  EXCLUDED_RECIPIENTS
 };
