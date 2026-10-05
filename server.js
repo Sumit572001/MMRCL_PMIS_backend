@@ -177,9 +177,9 @@ connectDB().then(async () => {
         existing.role = u.role;
         existing.organization = u.organization;
         existing.name = u.name;
-        existing.password = u.password;
+        // Preserve user created/updated password - do not overwrite
         await existing.save();
-        console.log(`[AutoSeed] Synced account for ${u.userId}`);
+        console.log(`[AutoSeed] Synced metadata for ${u.userId}`);
       }
     }
   } catch (err) {

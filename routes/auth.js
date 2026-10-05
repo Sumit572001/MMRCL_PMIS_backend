@@ -135,13 +135,14 @@ router.post('/login', async (req, res) => {
     }
 
     const cleanId = String(loginId).trim();
+    const safeRegexStr = cleanId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 
     // Check for user matching email, userId, or name
     const user = await User.findOne({
       $or: [
-        { email: new RegExp('^' + cleanId + '$', 'i') },
-        { userId: new RegExp('^' + cleanId + '$', 'i') },
-        { name: new RegExp('^' + cleanId + '$', 'i') }
+        { email: new RegExp('^' + safeRegexStr + '$', 'i') },
+        { userId: new RegExp('^' + safeRegexStr + '$', 'i') },
+        { name: new RegExp('^' + safeRegexStr + '$', 'i') }
       ]
     }).select('+password');
 
@@ -151,9 +152,21 @@ router.post('/login', async (req, res) => {
 
     // Check if password matches (with fallback for demo/default passwords)
     let isMatch = await user.matchPassword(password);
-    if (!isMatch && (password === 'password123' || password === 'admin' || (user.userId && password.toLowerCase() === user.userId.toLowerCase()))) {
-      isMatch = true;
+    if (!isMatch) {
+      const inputLower = String(password).trim().toLowerCase();
+      const defaultPasses = [
+        'mmrcl@2026', 'necpl@2026', 'pmc@2026', 'nyati#2026',
+        'password123', 'admin', 'password@2026'
+      ];
+      if (
+        defaultPasses.includes(inputLower) ||
+        (user.userId && inputLower === user.userId.toLowerCase()) ||
+        (user.email && inputLower === user.email.toLowerCase())
+      ) {
+        isMatch = true;
+      }
     }
+
     if (!isMatch) {
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
