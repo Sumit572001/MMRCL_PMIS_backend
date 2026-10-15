@@ -156,12 +156,12 @@ connectDB().then(async () => {
         organization: 'PMC Office'
       },
       {
-        name: 'Nyati Group Coordination',
-        userId: 'NYATI_MMRCL',
+        name: 'coordination.mmrcl',
+        userId: 'coordination.mmrcl',
         email: 'coordination.mmrcl@nyatigroup.com',
         password: 'Mmrcl@2026',
         role: 'Contractor',
-        organization: 'Nyati Group Coordination'
+        organization: 'coordination.mmrcl'
       }
     ];
 
@@ -225,6 +225,29 @@ try {
       break;
     }
   }
+
+  // Sync 5 uploaded project details gallery images
+  const currentConvDir = path.join(userHome, '.gemini', 'antigravity-ide', 'brain', '1c005512-a00f-4375-bb4e-cf0dc814f56b');
+  const galleryFiles = [
+    { src: 'media__1791525481656.jpg', dest: 'project_img_1.jpg' },
+    { src: 'media__1791525481713.jpg', dest: 'project_img_2.jpg' },
+    { src: 'media__1791525481740.jpg', dest: 'project_img_3.jpg' },
+    { src: 'media__1791525481762.jpg', dest: 'project_img_4.jpg' },
+    { src: 'media__1791525481910.png', dest: 'project_img_5.png' },
+    { src: 'media__1791530240435.jpg', dest: 'nyati_logo.png' }
+  ];
+
+  const destFrontend = path.join(__dirname, '..', 'PMIS_frontend', 'public', 'uploads');
+  if (!fs.existsSync(destFrontend)) fs.mkdirSync(destFrontend, { recursive: true });
+
+  galleryFiles.forEach(item => {
+    const srcPath = path.join(currentConvDir, item.src);
+    if (fs.existsSync(srcPath)) {
+      fs.copyFileSync(srcPath, path.join(uploadPath, item.dest));
+      fs.copyFileSync(srcPath, path.join(destFrontend, item.dest));
+      console.log('[AutoSync] Synced gallery image:', item.dest);
+    }
+  });
 } catch (e) {
   console.log('Building image sync notice:', e.message);
 }
@@ -279,6 +302,16 @@ app.use('/api/registrations', (req, res, next) => {
 
 app.use('/api/rfi', (req, res, next) => {
   req.section = 'rfi';
+  next();
+}, require('./routes/generalDocs'));
+
+app.use('/api/ncr', (req, res, next) => {
+  req.section = 'ncr';
+  next();
+}, require('./routes/generalDocs'));
+
+app.use('/api/ra_bill', (req, res, next) => {
+  req.section = 'ra_bill';
   next();
 }, require('./routes/generalDocs'));
 

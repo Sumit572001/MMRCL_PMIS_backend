@@ -39,6 +39,10 @@ const GeneralDocumentSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  category: {
+    type: String,
+    default: '-'
+  },
   remark: {
     type: String,
     default: ''

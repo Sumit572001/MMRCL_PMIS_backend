@@ -29,35 +29,141 @@ const upload = multer({
   storage: storage
 });
 
+const mepCategories = [
+  '1. Operation and Maintenance Manuals',
+  '2. E & M Submissions'
+];
+
+const monitorCategories = [
+  '1. Initial Program and Works Program plus supporting information and narrative',
+  '2. Monthly Program Update',
+  '3. Three Month Rolling Program',
+  '4. Three Week Rolling Program',
+  '5. Monthly Progress Report',
+  '6. Method Statements',
+  '7. Interface Management Plan',
+  '8. Monitoring, protection and replacement proposal reports.'
+];
+
 // Default folders for different sections
 const defaultFoldersBySection = {
   tender: [
     '1. Corrigendum',
     '2. Work 314271'
+  ],
+  monitor: monitorCategories,
+  'project monitoring & control': monitorCategories,
+  drawing: [
+    '1. Works Drawings',
+    '2. As built drawings',
+    '3. Construction Reference Drawings'
+  ],
+  quality: [
+    '1. Quality Plan',
+    '2. Quality Control Register',
+    '3. Reports of Quarterly Quality Audits',
+    '4. Materials Submissions (documentation)',
+    '5. Materials and Workmanship Test Results/Reports'
+  ],
+  ehs: [
+    '1. Safety Plan',
+    '2. Environment Plan'
+  ],
+  mep: mepCategories,
+  'mep & it': mepCategories,
+  registrations: [
+    '1. Minutes of Meeting',
+    '2. Letter Correspondence',
+    '3. All other submittals'
   ]
 };
 
-
-
 // Helper to get section safely
 const getSection = (req) => {
-  return (req.section || req.params.section || 'general').toLowerCase();
+  const raw = (req.section || req.params.section || 'general').toLowerCase();
+  if (raw.includes('monitor')) return 'monitor';
+  if (raw.includes('drawing')) return 'drawing';
+  if (raw.includes('quality')) return 'quality';
+  if (raw.includes('ehs') || raw.includes('safety')) return 'ehs';
+  if (raw.includes('mep')) return 'mep';
+  if (raw.includes('registration')) return 'registrations';
+  if (raw.includes('ncr') || raw.includes('conformance')) return 'ncr';
+  return raw;
 };
 
-// @desc    Get all folders for a section (auto seeds default list on first request)
+// @desc    Get all folders for a section (auto seeds default category folders on request)
 // @route   GET /folders
 // @access  Private
 router.get('/folders', protect, async (req, res) => {
   try {
+    const rawSection = (req.section || req.params.section || 'general').toLowerCase();
     const section = getSection(req);
-    let folders = await GeneralFolder.find({ section }).sort({ name: 1 });
 
-    // Auto seed if empty and defaults are defined
-    if (folders.length === 0 && defaultFoldersBySection[section]) {
-      const defaults = defaultFoldersBySection[section].map(name => ({ name, section }));
-      await GeneralFolder.insertMany(defaults);
-      folders = await GeneralFolder.find({ section }).sort({ name: 1 });
+    // Find folders matching either normalized section key ('monitor') or raw section name ('project monitoring & control')
+    let folders = await GeneralFolder.find({
+      $or: [
+        { section: section },
+        { section: rawSection }
+      ]
+    }).sort({ name: 1 });
+
+    // Auto seed missing default category folders if defaults are defined for this section
+    const defaults = defaultFoldersBySection[section] || defaultFoldersBySection[rawSection];
+    if (defaults) {
+      const existingNames = new Set(folders.map(f => f.name.trim().toLowerCase()));
+      const missingDefaults = defaults.filter(name => {
+        const lowerName = name.trim().toLowerCase();
+        const unnumbered = lowerName.replace(/^\d+\.\s*/, '');
+        return !existingNames.has(lowerName) && !existingNames.has(unnumbered);
+      });
+
+      if (missingDefaults.length > 0) {
+        for (const folderName of missingDefaults) {
+          try {
+            await GeneralFolder.create({
+              name: folderName,
+              section: section,
+              parentFolder: null
+            });
+          } catch (dupErr) {
+            // Ignore duplicate key errors if folder already exists in DB
+          }
+        }
+        folders = await GeneralFolder.find({
+          $or: [
+            { section: section },
+            { section: rawSection }
+          ]
+        }).sort({ name: 1 });
+      }
     }
+
+    // Sort folders: default category folders first in order, custom/new folders at the bottom
+    const secDefaults = defaultFoldersBySection[section] || defaultFoldersBySection[rawSection] || [];
+    const cleanDefaults = secDefaults.map(d => d.trim().toLowerCase().replace(/^\d+\.\s*/, ''));
+
+    folders.sort((a, b) => {
+      const nameA = (a.name || '').trim().toLowerCase();
+      const unnumberedA = nameA.replace(/^\d+\.\s*/, '');
+
+      const nameB = (b.name || '').trim().toLowerCase();
+      const unnumberedB = nameB.replace(/^\d+\.\s*/, '');
+
+      let indexA = cleanDefaults.findIndex(d => nameA.includes(d) || unnumberedA.includes(d) || d.includes(unnumberedA));
+      let indexB = cleanDefaults.findIndex(d => nameB.includes(d) || unnumberedB.includes(d) || d.includes(unnumberedB));
+
+      const rankA = indexA !== -1 ? indexA + 1 : 1000;
+      const rankB = indexB !== -1 ? indexB + 1 : 1000;
+
+      if (rankA !== rankB) return rankA - rankB;
+
+      // Custom folders are sorted by creation time ascending (oldest first, newly created appended at bottom)
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a._id ? parseInt(a._id.toString().substring(0, 8), 16) : 0);
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (b._id ? parseInt(b._id.toString().substring(0, 8), 16) : 0);
+      if (timeA !== timeB) return timeA - timeB;
+
+      return nameA.localeCompare(nameB);
+    });
 
     res.status(200).json({
       success: true,
@@ -80,7 +186,7 @@ router.post('/folders', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide folder name' });
     }
 
-    const parentFolderId = parentFolder || null;
+    const parentFolderId = (parentFolder && parentFolder !== 'Root' && mongoose.isValidObjectId(parentFolder)) ? parentFolder : null;
 
     const folderExists = await GeneralFolder.findOne({ name: name.trim(), section, parentFolder: parentFolderId });
     if (folderExists) {
@@ -152,7 +258,11 @@ router.delete('/folders/:id', protect, async (req, res) => {
       req.user.role === 'Site Engineer' ||
       (req.user.userId && req.user.userId.toUpperCase() === 'NECPL') ||
       (req.user.email && req.user.email.toLowerCase().includes('necpl')) ||
-      (req.user.email && req.user.email.toLowerCase() === 'coordination.mmrcl@nyatigroup.com')
+      (req.user.email && req.user.email.toLowerCase() === 'coordination.mmrcl@nyatigroup.com') ||
+      (req.user.email && req.user.email.toLowerCase().includes('coordination.mmrcl')) ||
+      (req.user.userId && req.user.userId.toLowerCase().includes('coordination.mmrcl')) ||
+      (req.user.name && req.user.name.toLowerCase().includes('coordination.mmrcl')) ||
+      section === 'registrations'
     );
     if (!isFullRightsUser) {
       return res.status(403).json({ success: false, message: 'Delete rights are reserved exclusively for NECPL (Admin).' });
@@ -253,32 +363,51 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please upload a file' });
     }
 
-    const { name, folder } = req.body;
+    const { name, folder, category } = req.body;
     if (!name || !folder) {
       return res.status(400).json({ success: false, message: 'Please provide name and folder' });
     }
 
-    // Verify folder exists in this section
-    if (folder !== 'Root') {
-      const isObjectId = mongoose.isValidObjectId(folder);
+    // Verify folder exists in this section, or resolve from category if folder is Root
+    let finalFolder = folder;
+    if (finalFolder === 'Root' && category && category !== 'Overall Project' && category !== '-') {
+      const cleanCat = category.replace(/^\d+\.\s*/, '').trim();
+      const catFolder = await GeneralFolder.findOne({
+        $or: [
+          { name: category },
+          { name: new RegExp(`^(\\d+\\.\\s*)?${cleanCat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+        ],
+        section
+      });
+      if (catFolder) {
+        finalFolder = catFolder._id.toString();
+      }
+    }
+
+    if (finalFolder !== 'Root') {
+      const isObjectId = mongoose.isValidObjectId(finalFolder);
+      const unnumbered = finalFolder.replace(/^\d+\.\s*/, '').trim();
       const folderExists = await GeneralFolder.findOne({
         $or: [
-          ...(isObjectId ? [{ _id: folder }] : []),
-          { name: folder }
+          ...(isObjectId ? [{ _id: finalFolder }] : []),
+          { name: finalFolder },
+          { name: new RegExp(`^(\\d+\\.\\s*)?${unnumbered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
         ],
         section
       });
       if (!folderExists) {
-        return res.status(404).json({ success: false, message: `Folder '${folder}' not found in this section` });
+        return res.status(404).json({ success: false, message: `Folder '${finalFolder}' not found in this section` });
       }
+      finalFolder = folderExists._id.toString();
     }
 
     const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
 
     const document = await GeneralDocument.create({
       name,
-      folder,
+      folder: finalFolder,
       section,
+      category: category || '-',
       filePath: req.file.path,
       originalName: req.file.originalname,
       fileSize: req.file.size,
@@ -292,7 +421,7 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       uploaderName: req.user.name || req.user.userId || 'PMIS User',
       docName: name,
       sectionName: section,
-      folderName: folder,
+      folderName: folderExists ? folderExists.name : (finalFolder === 'Root' ? 'Root Folder' : folder),
       originalFileName: req.file.originalname,
       uploadedAt: document.uploadedAt,
       docId: document._id.toString(),
@@ -358,23 +487,32 @@ router.get('/view/:id', protect, async (req, res) => {
 
 // @desc    Delete a document in a section
 // @route   DELETE /:id
-// @access  Private (NECPL / Admin Only)
+// @access  Private (NECPL / Admin / Uploader)
 router.delete('/:id', protect, async (req, res) => {
   try {
-    const isFullRightsUser = req.user && (
-      req.user.role === 'Site Engineer' ||
-      (req.user.userId && req.user.userId.toUpperCase() === 'NECPL') ||
-      (req.user.email && req.user.email.toLowerCase().includes('necpl')) ||
-      (req.user.email && req.user.email.toLowerCase() === 'coordination.mmrcl@nyatigroup.com')
-    );
-    if (!isFullRightsUser) {
-      return res.status(403).json({ success: false, message: 'Delete rights are reserved exclusively for NECPL (Admin).' });
-    }
-
     const section = getSection(req);
     const document = await GeneralDocument.findOne({ _id: req.params.id, section });
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const isUploader = document.uploadedBy && req.user && (
+      document.uploadedBy.toString() === (req.user._id || req.user.id || '').toString()
+    );
+
+    const isFullRightsUser = req.user && (
+      req.user.role === 'Site Engineer' ||
+      (req.user.userId && req.user.userId.toUpperCase() === 'NECPL') ||
+      (req.user.email && req.user.email.toLowerCase().includes('necpl')) ||
+      (req.user.email && req.user.email.toLowerCase() === 'coordination.mmrcl@nyatigroup.com') ||
+      (req.user.email && req.user.email.toLowerCase().includes('coordination.mmrcl')) ||
+      (req.user.userId && req.user.userId.toLowerCase().includes('coordination.mmrcl')) ||
+      (req.user.name && req.user.name.toLowerCase().includes('coordination.mmrcl')) ||
+      section === 'registrations' ||
+      isUploader
+    );
+    if (!isFullRightsUser) {
+      return res.status(403).json({ success: false, message: 'Delete rights are reserved exclusively for NECPL (Admin).' });
     }
 
     // Delete physical file from disk
@@ -403,11 +541,12 @@ router.delete('/:id', protect, async (req, res) => {
 router.put('/:id', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const { name, folder } = req.body;
+    const { name, folder, category } = req.body;
 
     let updateFields = {};
     if (name) updateFields.name = name.trim();
     if (folder !== undefined) updateFields.folder = folder;
+    if (category !== undefined) updateFields.category = category;
 
     const document = await GeneralDocument.findOneAndUpdate(
       { _id: req.params.id, section },
