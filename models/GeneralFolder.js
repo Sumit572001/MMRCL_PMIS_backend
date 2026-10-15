@@ -10,6 +10,10 @@ const GeneralFolderSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  category: {
+    type: String,
+    default: null
+  },
   parentFolder: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'GeneralFolder',
@@ -20,8 +24,5 @@ const GeneralFolderSchema = new mongoose.Schema({
     default: Date.now
   }
 });
-
-// Ensure folder names are unique within the same parent folder and section
-GeneralFolderSchema.index({ name: 1, section: 1, parentFolder: 1 }, { unique: true });
 
 module.exports = mongoose.model('GeneralFolder', GeneralFolderSchema);

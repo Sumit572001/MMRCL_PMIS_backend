@@ -181,19 +181,21 @@ router.get('/folders', protect, async (req, res) => {
 router.post('/folders', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const { name, parentFolder } = req.body;
+    const { name, parentFolder, category } = req.body;
     if (!name) {
       return res.status(400).json({ success: false, message: 'Please provide folder name' });
     }
 
     const parentFolderId = (parentFolder && parentFolder !== 'Root' && mongoose.isValidObjectId(parentFolder)) ? parentFolder : null;
 
-    const folderExists = await GeneralFolder.findOne({ name: name.trim(), section, parentFolder: parentFolderId });
+    const folderQuery = { name: name.trim(), section, parentFolder: parentFolderId };
+    if (category) folderQuery.category = category;
+    const folderExists = await GeneralFolder.findOne(folderQuery);
     if (folderExists) {
       return res.status(400).json({ success: false, message: 'Folder name already exists in this parent folder' });
     }
 
-    const folder = await GeneralFolder.create({ name: name.trim(), section, parentFolder: parentFolderId });
+    const folder = await GeneralFolder.create({ name: name.trim(), section, parentFolder: parentFolderId, category: category || null });
     res.status(201).json({
       success: true,
       data: folder
