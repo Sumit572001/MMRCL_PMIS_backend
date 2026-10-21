@@ -91,6 +91,18 @@ const getSection = (req) => {
   return raw;
 };
 
+const getSectionFilter = (req) => {
+  const raw = (req.section || req.params.section || 'general').toLowerCase();
+  const normalized = getSection(req);
+  return {
+    $or: [
+      { section: normalized },
+      { section: raw },
+      { section: new RegExp(normalized, 'i') }
+    ]
+  };
+};
+
 // @desc    Get all folders for a section (auto seeds default category folders on request)
 // @route   GET /folders
 // @access  Private
@@ -324,8 +336,15 @@ router.delete('/folders/:id', protect, async (req, res) => {
 // @access  Private
 router.get('/', protect, async (req, res) => {
   try {
+    const rawSection = (req.section || req.params.section || 'general').toLowerCase();
     const section = getSection(req);
-    const documents = await GeneralDocument.find({ section }).populate('uploadedBy', 'name role').sort({ uploadedAt: -1 });
+    const documents = await GeneralDocument.find({
+      $or: [
+        { section: section },
+        { section: rawSection },
+        { section: new RegExp(section, 'i') }
+      ]
+    }).populate('uploadedBy', 'name role').sort({ uploadedAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -360,6 +379,7 @@ router.get('/doc-by-id/:id', protect, async (req, res) => {
 // @access  Private (All Authenticated Users)
 router.post('/', protect, upload.single('file'), async (req, res) => {
   try {
+    const rawSection = (req.section || req.params.section || 'general').toLowerCase();
     const section = getSection(req);
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'Please upload a file' });
@@ -370,37 +390,91 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide name and folder' });
     }
 
-    // Verify folder exists in this section, or resolve from category if folder is Root
     let finalFolder = folder;
+    let folderExists = null;
+
+    // Resolve category if folder is Root
     if (finalFolder === 'Root' && category && category !== 'Overall Project' && category !== '-') {
       const cleanCat = category.replace(/^\d+\.\s*/, '').trim();
       const catFolder = await GeneralFolder.findOne({
-        $or: [
-          { name: category },
-          { name: new RegExp(`^(\\d+\\.\\s*)?${cleanCat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-        ],
-        section
+        $and: [
+          {
+            $or: [
+              { name: category },
+              { name: new RegExp(`^(\\d+\\.\\s*)?${cleanCat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+            ]
+          },
+          {
+            $or: [
+              { section: section },
+              { section: rawSection },
+              { section: new RegExp(section, 'i') }
+            ]
+          }
+        ]
       });
       if (catFolder) {
         finalFolder = catFolder._id.toString();
+        folderExists = catFolder;
       }
     }
 
     if (finalFolder !== 'Root') {
       const isObjectId = mongoose.isValidObjectId(finalFolder);
       const unnumbered = finalFolder.replace(/^\d+\.\s*/, '').trim();
-      const folderExists = await GeneralFolder.findOne({
-        $or: [
-          ...(isObjectId ? [{ _id: finalFolder }] : []),
-          { name: finalFolder },
-          { name: new RegExp(`^(\\d+\\.\\s*)?${unnumbered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-        ],
-        section
-      });
-      if (!folderExists) {
-        return res.status(404).json({ success: false, message: `Folder '${finalFolder}' not found in this section` });
+
+      // 1. Try finding by ObjectId directly
+      if (isObjectId) {
+        folderExists = await GeneralFolder.findById(finalFolder);
       }
-      finalFolder = folderExists._id.toString();
+
+      // 2. If not found, try matching by name or unnumbered name in this section (normalized or raw)
+      if (!folderExists) {
+        folderExists = await GeneralFolder.findOne({
+          $and: [
+            {
+              $or: [
+                { name: finalFolder },
+                { name: new RegExp(`^(\\d+\\.\\s*)?${unnumbered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+              ]
+            },
+            {
+              $or: [
+                { section: section },
+                { section: rawSection },
+                { section: new RegExp(section, 'i') }
+              ]
+            }
+          ]
+        });
+      }
+
+      // 3. If still not found, search globally by name or unnumbered name
+      if (!folderExists) {
+        folderExists = await GeneralFolder.findOne({
+          $or: [
+            { name: finalFolder },
+            { name: new RegExp(`^(\\d+\\.\\s*)?${unnumbered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+          ]
+        });
+      }
+
+      // 4. If folder truly does not exist in DB, create it automatically so upload NEVER fails with 404!
+      if (!folderExists) {
+        try {
+          folderExists = await GeneralFolder.create({
+            name: finalFolder,
+            section: section,
+            parentFolder: null
+          });
+        } catch (createErr) {
+          folderExists = await GeneralFolder.findOne({ name: finalFolder });
+        }
+      }
+
+      if (folderExists) {
+        finalFolder = folderExists._id.toString();
+      }
     }
 
     const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
@@ -439,13 +513,14 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
   }
 });
 
+
 // @desc    Download document from a section
 // @route   GET /download/:id
 // @access  Private
 router.get('/download/:id', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -467,7 +542,7 @@ router.get('/download/:id', protect, async (req, res) => {
 router.get('/view/:id', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -493,7 +568,7 @@ router.get('/view/:id', protect, async (req, res) => {
 router.delete('/:id', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -550,8 +625,7 @@ router.put('/:id', protect, async (req, res) => {
     if (folder !== undefined) updateFields.folder = folder;
     if (category !== undefined) updateFields.category = category;
 
-    const document = await GeneralDocument.findOneAndUpdate(
-      { _id: req.params.id, section },
+    const document = await GeneralDocument.findByIdAndUpdate(req.params.id,
       updateFields,
       { new: true }
     );
@@ -588,7 +662,7 @@ router.put('/:id/remark', protect, upload.any(), async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please enter text or attach a file' });
     }
 
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -652,7 +726,7 @@ router.get('/remark-attachment/:filename', protect, async (req, res) => {
 router.post('/:id/sub-document', protect, upload.single('file'), async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
@@ -707,7 +781,7 @@ router.post('/:id/sub-document', protect, upload.single('file'), async (req, res
 router.put('/:id/sub-document/:subId/rename', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
@@ -740,7 +814,7 @@ router.put('/:id/sub-document/:subId/rename', protect, async (req, res) => {
 router.delete('/:id/sub-document/:subId', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
@@ -787,7 +861,7 @@ router.post('/:id/sub-document/:subId/remark', protect, (req, res, next) => {
 }, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
@@ -839,7 +913,7 @@ router.post('/:id/sub-document/:subId/remark', protect, (req, res, next) => {
 router.put('/:id/sub-document/:subId/remark/read', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
@@ -876,7 +950,7 @@ router.put('/:id/sub-document/:subId/remark/read', protect, async (req, res) => 
 router.delete('/:id/sub-document/:subId/remarks/clear-all', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
@@ -904,7 +978,7 @@ router.delete('/:id/sub-document/:subId/remarks/clear-all', protect, async (req,
 router.put('/:id/remark/read', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -941,7 +1015,7 @@ router.put('/:id/remark/read', protect, async (req, res) => {
 router.delete('/:id/remark/:remarkId', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -1088,7 +1162,7 @@ router.get('/all-uploads', protect, async (req, res) => {
 router.put('/:id/viewed', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -1135,8 +1209,7 @@ router.put('/mark-all-read', protect, async (req, res) => {
 router.delete('/:id/remarks/clear-all', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOneAndUpdate(
-      { _id: req.params.id, section },
+    const document = await GeneralDocument.findByIdAndUpdate(req.params.id,
       { $set: { remarks: [], remark: '' } },
       { new: true }
     );
@@ -1167,7 +1240,7 @@ router.put('/reset-all-remarks', protect, async (req, res) => {
 router.get('/:id/sub-document/:subId/download', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
@@ -1198,7 +1271,7 @@ router.get('/:id/sub-document/:subId/download', protect, async (req, res) => {
 router.get('/:id/sub-document/:subId/view', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
@@ -1234,7 +1307,7 @@ router.put('/:id/approval-authority', protect, async (req, res) => {
     const section = getSection(req);
     const { authority } = req.body;
     
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -1263,7 +1336,7 @@ router.put('/:id/approval-authority', protect, async (req, res) => {
 router.post('/:id/approve', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
@@ -1514,7 +1587,7 @@ router.put('/:id/sub-document/:subId/approval-authority', protect, async (req, r
     const section = getSection(req);
     const { authority } = req.body;
 
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
@@ -1547,7 +1620,7 @@ router.put('/:id/sub-document/:subId/approval-authority', protect, async (req, r
 router.post('/:id/sub-document/:subId/approve', protect, async (req, res) => {
   try {
     const section = getSection(req);
-    const document = await GeneralDocument.findOne({ _id: req.params.id, section });
+    const document = await GeneralDocument.findById(req.params.id);
     if (!document) {
       return res.status(404).json({ success: false, message: 'Parent document not found' });
     }
