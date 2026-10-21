@@ -97,7 +97,7 @@ const notifyNewDocumentUpload = async ({
       timeStyle: 'short'
     });
 
-    const portalBaseUrl = process.env.PORTAL_URL || 'http://localhost:3001';
+    const portalBaseUrl = process.env.PORTAL_URL || 'https://projectmanagement.nyatigroup.com';
     const viewButtonUrl = docId
       ? `${portalBaseUrl}?openDocId=${docId}&docType=${docType}&section=${encodeURIComponent(sectionName)}`
       : portalBaseUrl;

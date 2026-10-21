@@ -337,27 +337,26 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 server.timeout = 30 * 60 * 1000; // 30 minutes timeout for large file uploads
 server.keepAliveTimeout = 30 * 60 * 1000;
 
-// Backward compatibility: redirect any incoming requests on port 3000 to port 3001 (for previously sent email links)
+// Backward compatibility: redirect any incoming requests on port 3000 and 3001 to https://projectmanagement.nyatigroup.com (for previously sent email links)
 const http = require('http');
-try {
-  const redirectServer = http.createServer((req, res) => {
-    const targetUrl = `http://localhost:3001${req.url}`;
-    res.writeHead(302, { Location: targetUrl });
-    res.end();
-  });
-  redirectServer.listen(3000, () => {
-    console.log('[Redirect Service] Listening on port 3000 -> redirecting to http://localhost:3001');
-  });
-  redirectServer.on('error', (err) => {
-    console.log('[Redirect Service] Port 3000 notice:', err.message);
-  });
-} catch (e) {
-  console.log('[Redirect Service] Port 3000 notice:', e.message);
-}
 
+const createRedirector = (listenPort) => {
+  try {
+    const srv = http.createServer((req, res) => {
+      const targetUrl = `https://projectmanagement.nyatigroup.com${req.url}`;
+      res.writeHead(302, { Location: targetUrl });
+      res.end();
+    });
+    srv.listen(listenPort, '0.0.0.0', () => {
+      console.log(`[Redirect Service] Listening on port ${listenPort} -> redirecting to https://projectmanagement.nyatigroup.com`);
+    });
+    srv.on('error', (err) => {
+      console.log(`[Redirect Service] Port ${listenPort} notice:`, err.message);
+    });
+  } catch (e) {
+    console.log(`[Redirect Service] Port ${listenPort} notice:`, e.message);
+  }
+};
 
-process.on('unhandledRejection', (err, promise) => {
-  console.error(`Error: ${err.message}`);
-  // Close server & exit process
-  server.close(() => process.exit(1));
-});
+createRedirector(3000);
+createRedirector(3001);

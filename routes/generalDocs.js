@@ -525,7 +525,14 @@ router.get('/download/:id', protect, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
 
-    const resolvedPath = path.resolve(document.filePath);
+    let resolvedPath = path.resolve(document.filePath);
+    if (!fs.existsSync(resolvedPath)) {
+      resolvedPath = path.resolve(path.join(__dirname, '..', document.filePath));
+    }
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    if (!fs.existsSync(resolvedPath)) {
+      resolvedPath = path.resolve(path.join(__dirname, '..', uploadDir, path.basename(document.filePath)));
+    }
     if (!fs.existsSync(resolvedPath)) {
       return res.status(404).json({ success: false, message: 'Physical file not found on server storage' });
     }
@@ -547,7 +554,14 @@ router.get('/view/:id', protect, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
 
-    const resolvedPath = path.resolve(document.filePath);
+    let resolvedPath = path.resolve(document.filePath);
+    if (!fs.existsSync(resolvedPath)) {
+      resolvedPath = path.resolve(path.join(__dirname, '..', document.filePath));
+    }
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    if (!fs.existsSync(resolvedPath)) {
+      resolvedPath = path.resolve(path.join(__dirname, '..', uploadDir, path.basename(document.filePath)));
+    }
     if (!fs.existsSync(resolvedPath)) {
       return res.status(404).json({ success: false, message: 'Physical file not found on server storage' });
     }
