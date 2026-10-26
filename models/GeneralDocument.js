@@ -14,10 +14,7 @@ const GeneralDocumentSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  filePath: {
-    type: String,
-    required: true
-  },
+  filePath: { type: String, required: false }, filename: { type: String },
   originalName: {
     type: String,
     required: true
@@ -30,11 +27,7 @@ const GeneralDocumentSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  uploadedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
+  uploadedBy: { type: mongoose.Schema.Types.Mixed },
   uploadedAt: {
     type: Date,
     default: Date.now
@@ -59,6 +52,32 @@ const GeneralDocumentSchema = new mongoose.Schema({
     type: String,
     default: 'Approved'
   },
+  ncStatus: {
+    type: String,
+    default: 'NC Pending'
+  },
+  ncRequested: {
+    type: Boolean,
+    default: false
+  },
+  ncRequestedBy: {
+    type: String,
+    default: ''
+  },
+  ncRequestedAt: {
+    type: Date
+  },
+  ncApprovedCompliance: {
+    type: Boolean,
+    default: false
+  },
+  ncApprovedBy: {
+    type: String,
+    default: ''
+  },
+  ncApprovedAt: {
+    type: Date
+  },
   remarks: [
     {
       text: { type: String, default: '' },
@@ -82,15 +101,22 @@ const GeneralDocumentSchema = new mongoose.Schema({
     {
       name: { type: String, required: true },
       originalName: { type: String, required: true },
-      filePath: { type: String, required: true },
+      filePath: { type: String, required: false }, filename: { type: String },
       fileSize: { type: Number, required: true },
       mimeType: { type: String, required: true },
-      uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      uploadedBy: { type: mongoose.Schema.Types.Mixed },
       uploadedByName: { type: String, default: 'User' },
       uploadedAt: { type: Date, default: Date.now },
       approvalAuthority: { type: String, default: '' },
       approvedBy: { type: String, default: '' },
       approvalStatus: { type: String, default: 'Approved' },
+      ncStatus: { type: String, default: 'NC Pending' },
+      ncRequested: { type: Boolean, default: false },
+      ncRequestedBy: { type: String, default: '' },
+      ncRequestedAt: { type: Date },
+      ncApprovedCompliance: { type: Boolean, default: false },
+      ncApprovedBy: { type: String, default: '' },
+      ncApprovedAt: { type: Date },
       remarks: [
         {
           text: { type: String, default: '' },

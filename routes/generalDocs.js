@@ -479,6 +479,7 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
 
     const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
 
+    const isNcrSection = section === 'ncr';
     const document = await GeneralDocument.create({
       name,
       folder: finalFolder,
@@ -489,7 +490,14 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       uploadedBy: req.user.id,
-      viewedBy: [currentUserId]
+      viewedBy: [currentUserId],
+      ...(isNcrSection ? {
+        ncStatus: 'NC Pending',
+        approvalStatus: 'NC Pending',
+        approvalAuthority: 'PMC',
+        ncRequested: false,
+        ncApprovedCompliance: false
+      } : {})
     });
 
     // Trigger non-blocking async Email Notification to all 14 users
@@ -638,6 +646,13 @@ router.put('/:id', protect, async (req, res) => {
     if (name) updateFields.name = name.trim();
     if (folder !== undefined) updateFields.folder = folder;
     if (category !== undefined) updateFields.category = category;
+    if (req.body.ncStatus !== undefined) updateFields.ncStatus = req.body.ncStatus;
+    if (req.body.ncRequested !== undefined) updateFields.ncRequested = req.body.ncRequested;
+    if (req.body.ncRequestedBy !== undefined) updateFields.ncRequestedBy = req.body.ncRequestedBy;
+    if (req.body.ncRequestedAt !== undefined) updateFields.ncRequestedAt = req.body.ncRequestedAt;
+    if (req.body.ncApprovedCompliance !== undefined) updateFields.ncApprovedCompliance = req.body.ncApprovedCompliance;
+    if (req.body.ncApprovedBy !== undefined) updateFields.ncApprovedBy = req.body.ncApprovedBy;
+    if (req.body.ncApprovedAt !== undefined) updateFields.ncApprovedAt = req.body.ncApprovedAt;
 
     const document = await GeneralDocument.findByIdAndUpdate(req.params.id,
       updateFields,
@@ -839,12 +854,521 @@ router.delete('/:id/sub-document/:subId', protect, async (req, res) => {
     }
 
     const uploadDir = process.env.UPLOAD_DIR || 'uploads';
-    const filePath = path.join(uploadDir, path.basename(subDoc.filePath));
-    if (fs.existsSync(filePath)) {
+    const targetFile = subDoc.filePath || subDoc.filename;
+    if (targetFile && typeof targetFile === 'string') {
+      const filePath = path.join(uploadDir, path.basename(targetFile));
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (e) {
+          console.error('Error removing file:', e);
+        }
+      }
+    }
+
+    const updatedDocument = await GeneralDocument.findByIdAndUpdate(
+      req.params.id,
+      { $pull: { subDocuments: { _id: req.params.subId } } },
+      { new: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: updatedDocument || document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Upload new document in a section
+// @route   POST /
+// @access  Private (All Authenticated Users)
+router.post('/', protect, upload.single('file'), async (req, res) => {
+  try {
+    const rawSection = (req.section || req.params.section || 'general').toLowerCase();
+    const section = getSection(req);
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Please upload a file' });
+    }
+
+    const { name, folder, category } = req.body;
+    if (!name || !folder) {
+      return res.status(400).json({ success: false, message: 'Please provide name and folder' });
+    }
+
+    let finalFolder = folder;
+    let folderExists = null;
+
+    // Resolve category if folder is Root
+    if (finalFolder === 'Root' && category && category !== 'Overall Project' && category !== '-') {
+      const cleanCat = category.replace(/^\d+\.\s*/, '').trim();
+      const catFolder = await GeneralFolder.findOne({
+        $and: [
+          {
+            $or: [
+              { name: category },
+              { name: new RegExp(`^(\\d+\\.\\s*)?${cleanCat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+            ]
+          },
+          {
+            $or: [
+              { section: section },
+              { section: rawSection },
+              { section: new RegExp(section, 'i') }
+            ]
+          }
+        ]
+      });
+      if (catFolder) {
+        finalFolder = catFolder._id.toString();
+        folderExists = catFolder;
+      }
+    }
+
+    if (finalFolder !== 'Root') {
+      const isObjectId = mongoose.isValidObjectId(finalFolder);
+      const unnumbered = finalFolder.replace(/^\d+\.\s*/, '').trim();
+
+      // 1. Try finding by ObjectId directly
+      if (isObjectId) {
+        folderExists = await GeneralFolder.findById(finalFolder);
+      }
+
+      // 2. If not found, try matching by name or unnumbered name in this section (normalized or raw)
+      if (!folderExists) {
+        folderExists = await GeneralFolder.findOne({
+          $and: [
+            {
+              $or: [
+                { name: finalFolder },
+                { name: new RegExp(`^(\\d+\\.\\s*)?${unnumbered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+              ]
+            },
+            {
+              $or: [
+                { section: section },
+                { section: rawSection },
+                { section: new RegExp(section, 'i') }
+              ]
+            }
+          ]
+        });
+      }
+
+      // 3. If still not found, search globally by name or unnumbered name
+      if (!folderExists) {
+        folderExists = await GeneralFolder.findOne({
+          $or: [
+            { name: finalFolder },
+            { name: new RegExp(`^(\\d+\\.\\s*)?${unnumbered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+          ]
+        });
+      }
+
+      // 4. If folder truly does not exist in DB, create it automatically so upload NEVER fails with 404!
+      if (!folderExists) {
+        try {
+          folderExists = await GeneralFolder.create({
+            name: finalFolder,
+            section: section,
+            parentFolder: null
+          });
+        } catch (createErr) {
+          folderExists = await GeneralFolder.findOne({ name: finalFolder });
+        }
+      }
+
+      if (folderExists) {
+        finalFolder = folderExists._id.toString();
+      }
+    }
+
+    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
+
+    const isNcrSection = section === 'ncr';
+    const document = await GeneralDocument.create({
+      name,
+      folder: finalFolder,
+      section,
+      category: category || '-',
+      filePath: req.file.path,
+      originalName: req.file.originalname,
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype,
+      uploadedBy: req.user.id,
+      viewedBy: [currentUserId],
+      ...(isNcrSection ? {
+        ncStatus: 'NC Pending',
+        approvalStatus: 'NC Pending',
+        approvalAuthority: 'PMC',
+        ncRequested: false,
+        ncApprovedCompliance: false
+      } : {})
+    });
+
+    // Trigger non-blocking async Email Notification to all 14 users
+    notifyNewDocumentUpload({
+      uploaderName: req.user.name || req.user.userId || 'PMIS User',
+      docName: name,
+      sectionName: section,
+      folderName: folderExists ? folderExists.name : (finalFolder === 'Root' ? 'Root Folder' : folder),
+      originalFileName: req.file.originalname,
+      uploadedAt: document.uploadedAt,
+      docId: document._id.toString(),
+      docType: 'general'
+    }).catch(err => console.error('[EmailTrigger Error]', err));
+
+    res.status(201).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+
+// @desc    Download document from a section
+// @route   GET /download/:id
+// @access  Private
+router.get('/download/:id', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    let resolvedPath = path.resolve(document.filePath);
+    if (!fs.existsSync(resolvedPath)) {
+      resolvedPath = path.resolve(path.join(__dirname, '..', document.filePath));
+    }
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    if (!fs.existsSync(resolvedPath)) {
+      resolvedPath = path.resolve(path.join(__dirname, '..', uploadDir, path.basename(document.filePath)));
+    }
+    if (!fs.existsSync(resolvedPath)) {
+      return res.status(404).json({ success: false, message: 'Physical file not found on server storage' });
+    }
+
+    res.download(resolvedPath, document.originalName);
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    View document inline from a section
+// @route   GET /view/:id
+// @access  Private
+router.get('/view/:id', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    let resolvedPath = path.resolve(document.filePath);
+    if (!fs.existsSync(resolvedPath)) {
+      resolvedPath = path.resolve(path.join(__dirname, '..', document.filePath));
+    }
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    if (!fs.existsSync(resolvedPath)) {
+      resolvedPath = path.resolve(path.join(__dirname, '..', uploadDir, path.basename(document.filePath)));
+    }
+    if (!fs.existsSync(resolvedPath)) {
+      return res.status(404).json({ success: false, message: 'Physical file not found on server storage' });
+    }
+
+    if (document.mimeType) {
+      res.setHeader('Content-Type', document.mimeType);
+    }
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(document.originalName)}"`);
+    res.sendFile(resolvedPath);
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Delete a document in a section
+// @route   DELETE /:id
+// @access  Private (NECPL / Admin / Uploader)
+router.delete('/:id', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const isUploader = document.uploadedBy && req.user && (
+      document.uploadedBy.toString() === (req.user._id || req.user.id || '').toString()
+    );
+
+    const isFullRightsUser = req.user && (
+      req.user.role === 'Site Engineer' ||
+      (req.user.userId && req.user.userId.toUpperCase() === 'NECPL') ||
+      (req.user.email && req.user.email.toLowerCase().includes('necpl')) ||
+      (req.user.email && req.user.email.toLowerCase() === 'coordination.mmrcl@nyatigroup.com') ||
+      (req.user.email && req.user.email.toLowerCase().includes('coordination.mmrcl')) ||
+      (req.user.userId && req.user.userId.toLowerCase().includes('coordination.mmrcl')) ||
+      (req.user.name && req.user.name.toLowerCase().includes('coordination.mmrcl')) ||
+      section === 'registrations' ||
+      isUploader
+    );
+    if (!isFullRightsUser) {
+      return res.status(403).json({ success: false, message: 'Delete rights are reserved exclusively for NECPL (Admin).' });
+    }
+
+    // Delete physical file from disk
+    if (document.filePath && fs.existsSync(document.filePath)) {
       try {
-        fs.unlinkSync(filePath);
-      } catch (e) {
-        console.error('Error removing file:', e);
+        fs.unlinkSync(document.filePath);
+      } catch (unlinkErr) {
+        console.error(`Failed to delete physical file: ${document.filePath}`, unlinkErr);
+      }
+    }
+
+    await GeneralDocument.findByIdAndDelete(req.params.id);
+
+    res.status(200).json({
+      success: true,
+      message: 'Document deleted successfully'
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Rename or Move a document in a section
+// @route   PUT /:id
+// @access  Private
+router.put('/:id', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const { name, folder, category } = req.body;
+
+    let updateFields = {};
+    if (name) updateFields.name = name.trim();
+    if (folder !== undefined) updateFields.folder = folder;
+    if (category !== undefined) updateFields.category = category;
+    if (req.body.ncStatus !== undefined) updateFields.ncStatus = req.body.ncStatus;
+    if (req.body.ncRequested !== undefined) updateFields.ncRequested = req.body.ncRequested;
+    if (req.body.ncRequestedBy !== undefined) updateFields.ncRequestedBy = req.body.ncRequestedBy;
+    if (req.body.ncRequestedAt !== undefined) updateFields.ncRequestedAt = req.body.ncRequestedAt;
+    if (req.body.ncApprovedCompliance !== undefined) updateFields.ncApprovedCompliance = req.body.ncApprovedCompliance;
+    if (req.body.ncApprovedBy !== undefined) updateFields.ncApprovedBy = req.body.ncApprovedBy;
+    if (req.body.ncApprovedAt !== undefined) updateFields.ncApprovedAt = req.body.ncApprovedAt;
+
+    const document = await GeneralDocument.findByIdAndUpdate(req.params.id,
+      updateFields,
+      { new: true }
+    );
+
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Add a new remark message to a document in a section (WhatsApp-style Chat with Attachments)
+// @route   PUT /:id/remark
+// @access  Private
+router.put('/:id/remark', protect, upload.any(), async (req, res) => {
+  try {
+    const section = getSection(req);
+    const text = (req.body.text || req.body.remark || '').trim();
+
+    let uploadedFiles = [];
+    if (req.files && Array.isArray(req.files)) {
+      uploadedFiles = req.files;
+    } else if (req.file) {
+      uploadedFiles = [req.file];
+    }
+
+    if (!text && uploadedFiles.length === 0) {
+      return res.status(400).json({ success: false, message: 'Please enter text or attach a file' });
+    }
+
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
+
+    const attachments = uploadedFiles.map(f => ({
+      filePath: f.path,
+      originalName: f.originalname,
+      fileSize: f.size,
+      mimeType: f.mimetype
+    }));
+
+    const remarkEntry = {
+      text,
+      user: req.user._id || req.user.id,
+      userName: req.user.userId || req.user.name || 'User',
+      userRole: req.user.organization || req.user.role || 'Member',
+      createdAt: new Date(),
+      readBy: [currentUserId],
+      attachments
+    };
+
+    if (!document.remarks) {
+      document.remarks = [];
+    }
+
+    document.remarks.push(remarkEntry);
+    document.remark = text || (attachments.length > 0 ? `[Attachment: ${attachments[0].originalName}]` : '');
+
+    await document.save();
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    View/Download remark attachment
+// @route   GET /remark-attachment/:filename
+// @access  Private
+router.get('/remark-attachment/:filename', protect, async (req, res) => {
+  try {
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    const filePath = path.join(uploadDir, path.basename(req.params.filename));
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: 'Attachment file not found' });
+    }
+    res.sendFile(path.resolve(filePath));
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Upload a sub-document / revision for a parent document
+// @route   POST /:id/sub-document
+// @access  Private
+router.post('/:id/sub-document', protect, upload.single('file'), async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Please upload a file' });
+    }
+
+    const { name } = req.body;
+    const subDoc = {
+      name: name || req.file.originalname,
+      originalName: req.file.originalname,
+      filePath: req.file.filename,
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype,
+      uploadedBy: req.user._id || req.user.id,
+      uploadedByName: req.user.userId || req.user.name || 'User',
+      uploadedAt: new Date()
+    };
+
+    if (!document.subDocuments) {
+      document.subDocuments = [];
+    }
+
+    document.subDocuments.push(subDoc);
+    await document.save();
+
+    // Trigger non-blocking async Email Notification for sub-document revision
+    notifyNewDocumentUpload({
+      uploaderName: req.user.name || req.user.userId || 'PMIS User',
+      docName: `${document.name} (Revision: ${subDoc.name})`,
+      sectionName: section,
+      folderName: document.folder || 'Sub-Document',
+      originalFileName: req.file.originalname,
+      uploadedAt: subDoc.uploadedAt,
+      docId: document._id.toString(),
+      docType: 'general'
+    }).catch(err => console.error('[EmailTrigger Error]', err));
+
+    res.status(201).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Rename a sub-document
+// @route   PUT /:id/sub-document/:subId/rename
+// @access  Private
+router.put('/:id/sub-document/:subId/rename', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid name' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    subDoc.name = name.trim();
+    await document.save();
+
+    res.status(200).json({
+      success: true,
+      data: document
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @desc    Delete a sub-document
+// @route   DELETE /:id/sub-document/:subId
+// @access  Private
+router.delete('/:id/sub-document/:subId', protect, async (req, res) => {
+  try {
+    const section = getSection(req);
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Parent document not found' });
+    }
+
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) {
+      return res.status(404).json({ success: false, message: 'Sub-document not found' });
+    }
+
+    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    if (subDoc.filePath && typeof subDoc.filePath === 'string') {
+      const filePath = path.join(uploadDir, path.basename(subDoc.filePath));
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (e) {
+          console.error('Error removing file:', e);
+        }
       }
     }
 
@@ -1265,6 +1789,9 @@ router.get('/:id/sub-document/:subId/download', protect, async (req, res) => {
     }
 
     const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    if (!subDoc.filePath || typeof subDoc.filePath !== 'string') {
+      return res.status(404).json({ success: false, message: 'Physical file path not found for this sub-document' });
+    }
     // filePath may be stored as just the filename or as a full path
     const filename = path.basename(subDoc.filePath);
     const resolvedPath = path.resolve(path.join(uploadDir, filename));
@@ -1296,6 +1823,9 @@ router.get('/:id/sub-document/:subId/view', protect, async (req, res) => {
     }
 
     const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+    if (!subDoc.filePath || typeof subDoc.filePath !== 'string') {
+      return res.status(404).json({ success: false, message: 'Physical file path not found for this sub-document' });
+    }
     const filename = path.basename(subDoc.filePath);
     const resolvedPath = path.resolve(path.join(uploadDir, filename));
 
@@ -1873,6 +2403,95 @@ router.post('/:id/sub-document/:subId/approve', protect, async (req, res) => {
       }
     }
 
+    await document.save();
+    res.status(200).json({ success: true, data: document });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+
+// @route   PUT /:id/ncr-request
+// @desc    NECPL submits request to remove NC
+// @access  Private
+router.put('/:id/ncr-request', protect, async (req, res) => {
+  try {
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+    const requesterName = req.user.name || req.user.userId || 'NECPL';
+    document.ncRequested = true;
+    document.ncRequestedBy = requesterName;
+    document.ncRequestedAt = new Date();
+    document.ncStatus = 'NC Pending';
+    await document.save();
+    res.status(200).json({ success: true, data: document });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @route   PUT /:id/ncr-approve
+// @desc    PMC approves compliance and removes NC
+// @access  Private
+router.put('/:id/ncr-approve', protect, async (req, res) => {
+  try {
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+    const approverName = req.user.name || req.user.userId || 'PMC';
+    document.ncApprovedCompliance = true;
+    document.ncApprovedBy = approverName;
+    document.ncApprovedAt = new Date();
+    document.ncStatus = 'NC Removed';
+    document.approvalStatus = 'Approved';
+    await document.save();
+    res.status(200).json({ success: true, data: document });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @route   PUT /:id/sub-document/:subId/ncr-request
+// @desc    NECPL submits request to remove NC for sub-document
+// @access  Private
+router.put('/:id/sub-document/:subId/ncr-request', protect, async (req, res) => {
+  try {
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) return res.status(404).json({ success: false, message: 'Document not found' });
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) return res.status(404).json({ success: false, message: 'Sub-document not found' });
+
+    const requesterName = req.user.name || req.user.userId || 'NECPL';
+    subDoc.ncRequested = true;
+    subDoc.ncRequestedBy = requesterName;
+    subDoc.ncRequestedAt = new Date();
+    subDoc.ncStatus = 'NC Pending';
+    await document.save();
+    res.status(200).json({ success: true, data: document });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+// @route   PUT /:id/sub-document/:subId/ncr-approve
+// @desc    PMC approves compliance for sub-document
+// @access  Private
+router.put('/:id/sub-document/:subId/ncr-approve', protect, async (req, res) => {
+  try {
+    const document = await GeneralDocument.findById(req.params.id);
+    if (!document) return res.status(404).json({ success: false, message: 'Document not found' });
+    const subDoc = document.subDocuments.id(req.params.subId);
+    if (!subDoc) return res.status(404).json({ success: false, message: 'Sub-document not found' });
+
+    const approverName = req.user.name || req.user.userId || 'PMC';
+    subDoc.ncApprovedCompliance = true;
+    subDoc.ncApprovedBy = approverName;
+    subDoc.ncApprovedAt = new Date();
+    subDoc.ncStatus = 'NC Removed';
+    subDoc.approvalStatus = 'Approved';
     await document.save();
     res.status(200).json({ success: true, data: document });
   } catch (error) {
