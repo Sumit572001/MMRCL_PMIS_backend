@@ -347,4 +347,16 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+// @desc    Get all users for directory / uploader name lookup
+// @route   GET /api/auth/users
+// @access  Private
+router.get('/users', protect, async (req, res) => {
+  try {
+    const users = await User.find({}, 'name userId email role organization').lean();
+    res.status(200).json({ success: true, count: users.length, data: users });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;

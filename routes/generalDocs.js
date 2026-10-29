@@ -139,90 +139,142 @@ async function populateDocumentUploaders(documents) {
   const docsList = isArray ? documents : [documents];
   if (docsList.length === 0) return documents;
 
-  const userIds = new Set();
   const hex24Regex = /^[0-9a-fA-F]{24}$/;
 
-  docsList.forEach(doc => {
-    if (doc.uploadedBy) {
-      const uId = (doc.uploadedBy._id || doc.uploadedBy).toString();
-      if (hex24Regex.test(uId)) userIds.add(uId);
-    }
-    if (Array.isArray(doc.subDocuments)) {
-      doc.subDocuments.forEach(sd => {
-        if (sd.uploadedBy) {
-          const sdId = (sd.uploadedBy._id || sd.uploadedBy).toString();
-          if (hex24Regex.test(sdId)) userIds.add(sdId);
-        }
-      });
-    }
-  });
-
-  let userMap = {};
-  if (userIds.size > 0) {
-    const users = await User.find({ _id: { $in: Array.from(userIds) } }, 'name email userId role organization').lean();
-    users.forEach(u => {
-      userMap[u._id.toString()] = u;
+  // Load all users to build accurate lookup maps
+  let userMapById = {};
+  let userMapByKey = {};
+  try {
+    const allUsers = await User.find({}, 'name email userId role organization').lean();
+    allUsers.forEach(u => {
+      userMapById[u._id.toString()] = u;
+      if (u.userId) userMapByKey[u.userId.toUpperCase()] = u;
+      if (u.email) userMapByKey[u.email.toLowerCase()] = u;
+      if (u.name) userMapByKey[u.name.toUpperCase()] = u;
     });
+  } catch (e) {
+    console.error('Error fetching users for uploader lookup:', e.message);
   }
 
-  docsList.forEach(doc => {
-    if (doc.uploadedBy) {
-      const uIdStr = (doc.uploadedBy._id || doc.uploadedBy).toString();
-      if (userMap[uIdStr]) {
-        const u = userMap[uIdStr];
-        doc.uploadedBy = {
-          _id: u._id,
-          name: u.name,
-          email: u.email,
-          userId: u.userId,
-          role: u.role,
-          organization: u.organization
+  // Load folders to resolve uploader by folder context (e.g. "BY PMC & ARCHITECT", "BY NECPL", "BY MMRCL")
+  let folderMap = {};
+  try {
+    const folderIds = new Set();
+    docsList.forEach(doc => {
+      if (doc.folder && hex24Regex.test(doc.folder.toString())) {
+        folderIds.add(doc.folder.toString());
+      }
+    });
+    if (folderIds.size > 0) {
+      const GeneralFolder = require('../models/GeneralFolder');
+      const folders = await GeneralFolder.find({ _id: { $in: Array.from(folderIds) } }, 'name').lean();
+      folders.forEach(f => {
+        folderMap[f._id.toString()] = f.name;
+      });
+    }
+  } catch (e) {}
+
+  const resolveUploader = (uploaderField, currentName, folderId, docName, origName) => {
+    // 1. If uploaderField is a user object
+    if (uploaderField && typeof uploaderField === 'object') {
+      const oId = (uploaderField._id || uploaderField.id)?.toString();
+      if (oId && userMapById[oId]) {
+        const u = userMapById[oId];
+        return {
+          obj: { _id: u._id, name: u.name, email: u.email, userId: u.userId, role: u.role, organization: u.organization },
+          name: u.name || u.userId || u.organization
         };
-        doc.uploadedByName = u.name || u.userId || u.email || 'coordination.mmrcl';
-      } else if (typeof doc.uploadedBy === 'string' && !hex24Regex.test(doc.uploadedBy)) {
-        doc.uploadedByName = (doc.uploadedByName && doc.uploadedByName !== 'User') ? doc.uploadedByName : doc.uploadedBy;
-      } else {
-        if (!doc.uploadedByName || doc.uploadedByName === 'User') {
-          doc.uploadedByName = 'coordination.mmrcl';
-        }
+      }
+      if (uploaderField.name && uploaderField.name !== 'User') {
+        return { obj: uploaderField, name: uploaderField.name };
+      }
+      if (uploaderField.userId && uploaderField.userId !== 'User') {
+        return { obj: uploaderField, name: uploaderField.userId };
       }
     }
-    if ((!doc.uploadedByName || doc.uploadedByName === 'User') && typeof doc.uploadedBy === 'object' && doc.uploadedBy?.name) {
-      doc.uploadedByName = doc.uploadedBy.name;
+
+    // 2. If uploaderField is an ID or string
+    if (uploaderField && typeof uploaderField === 'string' && uploaderField.trim()) {
+      const key = uploaderField.trim();
+      if (userMapById[key]) {
+        const u = userMapById[key];
+        return {
+          obj: { _id: u._id, name: u.name, email: u.email, userId: u.userId, role: u.role, organization: u.organization },
+          name: u.name || u.userId || u.organization
+        };
+      }
+      const upper = key.toUpperCase();
+      if (userMapByKey[upper]) {
+        const u = userMapByKey[upper];
+        return {
+          obj: { _id: u._id, name: u.name, email: u.email, userId: u.userId, role: u.role, organization: u.organization },
+          name: u.name || u.userId || u.organization
+        };
+      }
+      const lower = key.toLowerCase();
+      if (userMapByKey[lower]) {
+        const u = userMapByKey[lower];
+        return {
+          obj: { _id: u._id, name: u.name, email: u.email, userId: u.userId, role: u.role, organization: u.organization },
+          name: u.name || u.userId || u.organization
+        };
+      }
+      // If direct readable role/name string
+      if (!hex24Regex.test(key) && key !== 'User') {
+        return { obj: key, name: key };
+      }
     }
-    if (!doc.uploadedByName || doc.uploadedByName === 'User') {
-      doc.uploadedByName = 'coordination.mmrcl';
+
+    // 3. Check Folder context
+    if (folderId && folderMap[folderId.toString()]) {
+      const fUpper = folderMap[folderId.toString()].toUpperCase();
+      if (fUpper.includes('PMC') || fUpper.includes('ARCHITECT')) {
+        return { obj: 'PMC & Architect', name: 'PMC & Architect' };
+      }
+      if (fUpper.includes('NECPL')) {
+        return { obj: 'NECPL', name: 'NECPL' };
+      }
+      if (fUpper.includes('MMRCL')) {
+        return { obj: 'MMRCL', name: 'MMRCL' };
+      }
+      if (fUpper.includes('ENGINEER')) {
+        return { obj: 'Engineer', name: 'Engineer' };
+      }
+      if (fUpper.includes('CONTRACTOR')) {
+        return { obj: 'Contractor', name: 'Contractor' };
+      }
     }
+
+    // 4. Check document title or filename (e.g. "by NECPL", "by PMC", "by MMRCL")
+    const combinedStr = ((docName || '') + ' ' + (origName || '')).toUpperCase();
+    if (combinedStr.includes('BY NECPL') || combinedStr.includes('BY_NECPL')) {
+      return { obj: 'NECPL', name: 'NECPL' };
+    }
+    if (combinedStr.includes('BY PMC') || combinedStr.includes('BY_PMC')) {
+      return { obj: 'PMC & Architect', name: 'PMC & Architect' };
+    }
+    if (combinedStr.includes('BY MMRCL') || combinedStr.includes('BY_MMRCL')) {
+      return { obj: 'MMRCL', name: 'MMRCL' };
+    }
+
+    // 5. Check if existing currentName is valid
+    if (currentName && currentName !== 'User') {
+      return { obj: currentName, name: currentName };
+    }
+
+    return { obj: 'User', name: 'User' };
+  };
+
+  docsList.forEach(doc => {
+    const res = resolveUploader(doc.uploadedBy, doc.uploadedByName, doc.folder, doc.name, doc.originalName);
+    if (res.obj && res.obj !== 'User') doc.uploadedBy = res.obj;
+    if (res.name && res.name !== 'User') doc.uploadedByName = res.name;
 
     if (Array.isArray(doc.subDocuments)) {
       doc.subDocuments.forEach(sd => {
-        if (sd.uploadedBy) {
-          const sdIdStr = (sd.uploadedBy._id || sd.uploadedBy).toString();
-          if (userMap[sdIdStr]) {
-            const u = userMap[sdIdStr];
-            sd.uploadedBy = {
-              _id: u._id,
-              name: u.name,
-              email: u.email,
-              userId: u.userId,
-              role: u.role,
-              organization: u.organization
-            };
-            sd.uploadedByName = u.name || u.userId || u.email || 'coordination.mmrcl';
-          } else if (typeof sd.uploadedBy === 'string' && !hex24Regex.test(sd.uploadedBy)) {
-            sd.uploadedByName = (sd.uploadedByName && sd.uploadedByName !== 'User') ? sd.uploadedByName : sd.uploadedBy;
-          } else {
-            if (!sd.uploadedByName || sd.uploadedByName === 'User') {
-              sd.uploadedByName = 'coordination.mmrcl';
-            }
-          }
-        }
-        if ((!sd.uploadedByName || sd.uploadedByName === 'User') && typeof sd.uploadedBy === 'object' && sd.uploadedBy?.name) {
-          sd.uploadedByName = sd.uploadedBy.name;
-        }
-        if (!sd.uploadedByName || sd.uploadedByName === 'User') {
-          sd.uploadedByName = 'coordination.mmrcl';
-        }
+        const sdRes = resolveUploader(sd.uploadedBy, sd.uploadedByName, doc.folder, sd.name, sd.originalName);
+        if (sdRes.obj && sdRes.obj !== 'User') sd.uploadedBy = sdRes.obj;
+        if (sdRes.name && sdRes.name !== 'User') sd.uploadedByName = sdRes.name;
       });
     }
   });
