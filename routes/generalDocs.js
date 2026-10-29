@@ -6,6 +6,7 @@ const fs = require('fs');
 const mongoose = require('mongoose');
 const GeneralDocument = require('../models/GeneralDocument');
 const GeneralFolder = require('../models/GeneralFolder');
+const TenderFolder = require('../models/TenderFolder');
 const User = require('../models/User');
 const { protect, authorize } = require('../middleware/auth');
 const { notifyNewDocumentUpload } = require('../utils/emailService');
@@ -707,6 +708,30 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       }
     }
 
+    // Deduplication Guard: Check if a document with same originalName or same name already exists in this section & folder
+    const trimmedName = name ? name.trim() : '';
+    const existingDoc = await GeneralDocument.findOne({
+      section,
+      folder: finalFolder,
+      $or: [
+        { originalName: req.file.originalname },
+        { name: trimmedName }
+      ]
+    });
+
+    if (existingDoc) {
+      if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+        try { fs.unlinkSync(req.file.path); } catch (e) {}
+      }
+      console.log(`[Upload Duplicate Guard] Document "${trimmedName}" / "${req.file.originalname}" already exists in [${section} / ${finalFolder}]. Skipping duplicate creation & email notification.`);
+      return res.status(200).json({
+        success: true,
+        message: 'Document already exists in this folder',
+        data: existingDoc,
+        isDuplicate: true
+      });
+    }
+
     const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
 
     const isNcrSection = section === 'ncr';
@@ -1058,8 +1083,29 @@ router.post('/:id/sub-document', protect, upload.single('file'), async (req, res
     }
 
     const { name } = req.body;
+    const subDocName = (name && name.trim()) || req.file.originalname;
+
+    // Deduplication Guard: Check if this revision / sub-document is already uploaded
+    const isDuplicateSubDoc = (document.subDocuments || []).some(sd =>
+      (sd.originalName && sd.originalName.toLowerCase() === req.file.originalname.toLowerCase()) ||
+      (sd.name && sd.name.trim().toLowerCase() === subDocName.toLowerCase())
+    );
+
+    if (isDuplicateSubDoc) {
+      if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+        try { fs.unlinkSync(req.file.path); } catch (e) {}
+      }
+      console.log(`[SubDoc Duplicate Guard] Sub-document "${subDocName}" / "${req.file.originalname}" already exists for document "${document.name}". Skipping duplicate append & email notification.`);
+      return res.status(200).json({
+        success: true,
+        message: 'This revision/sub-document is already uploaded',
+        data: document,
+        isDuplicate: true
+      });
+    }
+
     const subDoc = {
-      name: name || req.file.originalname,
+      name: subDocName,
       originalName: req.file.originalname,
       filePath: req.file.filename,
       fileSize: req.file.size,
@@ -1076,12 +1122,25 @@ router.post('/:id/sub-document', protect, upload.single('file'), async (req, res
     document.subDocuments.push(subDoc);
     await document.save();
 
+    // Resolve human-readable folder name for notification (instead of raw ObjectId)
+    let folderDisplayName = 'Sub-Document';
+    if (document.folder) {
+      if (mongoose.isValidObjectId(document.folder)) {
+        try {
+          const fld = await GeneralFolder.findById(document.folder);
+          if (fld && fld.name) folderDisplayName = fld.name;
+        } catch (fldErr) {}
+      } else {
+        folderDisplayName = document.folder;
+      }
+    }
+
     // Trigger non-blocking async Email Notification for sub-document revision
     notifyNewDocumentUpload({
       uploaderName: req.user.name || req.user.userId || 'PMIS User',
       docName: `${document.name} (Revision: ${subDoc.name})`,
       sectionName: section,
-      folderName: document.folder || 'Sub-Document',
+      folderName: folderDisplayName,
       originalFileName: req.file.originalname,
       uploadedAt: subDoc.uploadedAt,
       docId: document._id.toString(),
@@ -1168,496 +1227,6 @@ router.delete('/:id/sub-document/:subId', protect, async (req, res) => {
     res.status(200).json({
       success: true,
       data: updatedDocument || document
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
-
-// @desc    Upload new document in a section
-// @route   POST /
-// @access  Private (All Authenticated Users)
-router.post('/', protect, upload.single('file'), async (req, res) => {
-  try {
-    const rawSection = (req.section || req.params.section || 'general').toLowerCase();
-    const section = getSection(req);
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'Please upload a file' });
-    }
-
-    const { name, folder, category } = req.body;
-    if (!name || !folder) {
-      return res.status(400).json({ success: false, message: 'Please provide name and folder' });
-    }
-
-    let finalFolder = folder;
-    let folderExists = null;
-
-    // Resolve category if folder is Root
-    if (finalFolder === 'Root' && category && category !== 'Overall Project' && category !== '-') {
-      const cleanCat = category.replace(/^\d+\.\s*/, '').trim();
-      const catFolder = await GeneralFolder.findOne({
-        $and: [
-          {
-            $or: [
-              { name: category },
-              { name: new RegExp(`^(\\d+\\.\\s*)?${cleanCat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-            ]
-          },
-          {
-            $or: [
-              { section: section },
-              { section: rawSection },
-              { section: new RegExp(section, 'i') }
-            ]
-          }
-        ]
-      });
-      if (catFolder) {
-        finalFolder = catFolder._id.toString();
-        folderExists = catFolder;
-      }
-    }
-
-    if (finalFolder !== 'Root') {
-      const isObjectId = mongoose.isValidObjectId(finalFolder);
-      const unnumbered = finalFolder.replace(/^\d+\.\s*/, '').trim();
-
-      // 1. Try finding by ObjectId directly
-      if (isObjectId) {
-        folderExists = await GeneralFolder.findById(finalFolder);
-      }
-
-      // 2. If not found, try matching by name or unnumbered name in this section (normalized or raw)
-      if (!folderExists) {
-        folderExists = await GeneralFolder.findOne({
-          $and: [
-            {
-              $or: [
-                { name: finalFolder },
-                { name: new RegExp(`^(\\d+\\.\\s*)?${unnumbered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-              ]
-            },
-            {
-              $or: [
-                { section: section },
-                { section: rawSection },
-                { section: new RegExp(section, 'i') }
-              ]
-            }
-          ]
-        });
-      }
-
-      // 3. If still not found, search globally by name or unnumbered name
-      if (!folderExists) {
-        folderExists = await GeneralFolder.findOne({
-          $or: [
-            { name: finalFolder },
-            { name: new RegExp(`^(\\d+\\.\\s*)?${unnumbered.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-          ]
-        });
-      }
-
-      // 4. If folder truly does not exist in DB, create it automatically so upload NEVER fails with 404!
-      if (!folderExists) {
-        try {
-          folderExists = await GeneralFolder.create({
-            name: finalFolder,
-            section: section,
-            parentFolder: null
-          });
-        } catch (createErr) {
-          folderExists = await GeneralFolder.findOne({ name: finalFolder });
-        }
-      }
-
-      if (folderExists) {
-        finalFolder = folderExists._id.toString();
-      }
-    }
-
-    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
-
-    const isNcrSection = section === 'ncr';
-    const document = await GeneralDocument.create({
-      name,
-      folder: finalFolder,
-      section,
-      category: category || '-',
-      filePath: req.file.path,
-      originalName: req.file.originalname,
-      fileSize: req.file.size,
-      mimeType: req.file.mimetype,
-      uploadedBy: req.user._id || req.user.id,
-      uploadedByName: req.user.name || req.user.userId || req.user.email || 'coordination.mmrcl',
-      viewedBy: [currentUserId],
-      ...(isNcrSection ? {
-        ncStatus: 'NC Pending',
-        approvalStatus: 'NC Pending',
-        approvalAuthority: 'PMC',
-        ncRequested: false,
-        ncApprovedCompliance: false
-      } : {})
-    });
-
-    // Trigger non-blocking async Email Notification to all 14 users
-    notifyNewDocumentUpload({
-      uploaderName: req.user.name || req.user.userId || 'PMIS User',
-      docName: name,
-      sectionName: section,
-      folderName: folderExists ? folderExists.name : (finalFolder === 'Root' ? 'Root Folder' : folder),
-      originalFileName: req.file.originalname,
-      uploadedAt: document.uploadedAt,
-      docId: document._id.toString(),
-      docType: 'general'
-    }).catch(err => console.error('[EmailTrigger Error]', err));
-
-    res.status(201).json({
-      success: true,
-      data: document
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
-
-
-// @desc    Download document from a section
-// @route   GET /download/:id
-// @access  Private
-router.get('/download/:id', protect, async (req, res) => {
-  try {
-    const section = getSection(req);
-    const document = await GeneralDocument.findById(req.params.id);
-    if (!document) {
-      return res.status(404).json({ success: false, message: 'Document not found' });
-    }
-
-    let resolvedPath = path.resolve(document.filePath);
-    if (!fs.existsSync(resolvedPath)) {
-      resolvedPath = path.resolve(path.join(__dirname, '..', document.filePath));
-    }
-    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
-    if (!fs.existsSync(resolvedPath)) {
-      resolvedPath = path.resolve(path.join(__dirname, '..', uploadDir, path.basename(document.filePath)));
-    }
-    if (!fs.existsSync(resolvedPath)) {
-      return res.status(404).json({ success: false, message: 'Physical file not found on server storage' });
-    }
-
-    res.download(resolvedPath, document.originalName);
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
-
-// @desc    View document inline from a section
-// @route   GET /view/:id
-// @access  Private
-router.get('/view/:id', protect, async (req, res) => {
-  try {
-    const section = getSection(req);
-    const document = await GeneralDocument.findById(req.params.id);
-    if (!document) {
-      return res.status(404).json({ success: false, message: 'Document not found' });
-    }
-
-    let resolvedPath = path.resolve(document.filePath);
-    if (!fs.existsSync(resolvedPath)) {
-      resolvedPath = path.resolve(path.join(__dirname, '..', document.filePath));
-    }
-    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
-    if (!fs.existsSync(resolvedPath)) {
-      resolvedPath = path.resolve(path.join(__dirname, '..', uploadDir, path.basename(document.filePath)));
-    }
-    if (!fs.existsSync(resolvedPath)) {
-      return res.status(404).json({ success: false, message: 'Physical file not found on server storage' });
-    }
-
-    if (document.mimeType) {
-      res.setHeader('Content-Type', document.mimeType);
-    }
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(document.originalName)}"`);
-    res.sendFile(resolvedPath);
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
-
-// @desc    Delete a document in a section
-// @route   DELETE /:id
-// @access  Private (NECPL / Admin / Uploader)
-router.delete('/:id', protect, async (req, res) => {
-  try {
-    const section = getSection(req);
-    const document = await GeneralDocument.findById(req.params.id);
-    if (!document) {
-      return res.status(404).json({ success: false, message: 'Document not found' });
-    }
-
-    const isUploader = document.uploadedBy && req.user && (
-      document.uploadedBy.toString() === (req.user._id || req.user.id || '').toString()
-    );
-
-    const isFullRightsUser = req.user && (
-      req.user.role === 'Site Engineer' ||
-      (req.user.userId && req.user.userId.toUpperCase() === 'NECPL') ||
-      (req.user.email && req.user.email.toLowerCase().includes('necpl')) ||
-      (req.user.email && req.user.email.toLowerCase() === 'coordination.mmrcl@nyatigroup.com') ||
-      (req.user.email && req.user.email.toLowerCase().includes('coordination.mmrcl')) ||
-      (req.user.userId && req.user.userId.toLowerCase().includes('coordination.mmrcl')) ||
-      (req.user.name && req.user.name.toLowerCase().includes('coordination.mmrcl')) ||
-      section === 'registrations' ||
-      isUploader
-    );
-    if (!isFullRightsUser) {
-      return res.status(403).json({ success: false, message: 'Delete rights are reserved exclusively for NECPL (Admin).' });
-    }
-
-    // Delete physical file from disk
-    if (document.filePath && fs.existsSync(document.filePath)) {
-      try {
-        fs.unlinkSync(document.filePath);
-      } catch (unlinkErr) {
-        console.error(`Failed to delete physical file: ${document.filePath}`, unlinkErr);
-      }
-    }
-
-    await GeneralDocument.findByIdAndDelete(req.params.id);
-
-    res.status(200).json({
-      success: true,
-      message: 'Document deleted successfully'
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
-
-// @desc    Rename or Move a document in a section
-// @route   PUT /:id
-// @access  Private
-router.put('/:id', protect, async (req, res) => {
-  try {
-    const section = getSection(req);
-    const { name, folder, category } = req.body;
-
-    let updateFields = {};
-    if (name) updateFields.name = name.trim();
-    if (folder !== undefined) updateFields.folder = folder;
-    if (category !== undefined) updateFields.category = category;
-    if (req.body.ncStatus !== undefined) updateFields.ncStatus = req.body.ncStatus;
-    if (req.body.ncRequested !== undefined) updateFields.ncRequested = req.body.ncRequested;
-    if (req.body.ncRequestedBy !== undefined) updateFields.ncRequestedBy = req.body.ncRequestedBy;
-    if (req.body.ncRequestedAt !== undefined) updateFields.ncRequestedAt = req.body.ncRequestedAt;
-    if (req.body.ncApprovedCompliance !== undefined) updateFields.ncApprovedCompliance = req.body.ncApprovedCompliance;
-    if (req.body.ncApprovedBy !== undefined) updateFields.ncApprovedBy = req.body.ncApprovedBy;
-    if (req.body.ncApprovedAt !== undefined) updateFields.ncApprovedAt = req.body.ncApprovedAt;
-
-    const document = await GeneralDocument.findByIdAndUpdate(req.params.id,
-      updateFields,
-      { new: true }
-    );
-
-    if (!document) {
-      return res.status(404).json({ success: false, message: 'Document not found' });
-    }
-
-    res.status(200).json({
-      success: true,
-      data: document
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
-
-// @desc    Add a new remark message to a document in a section (WhatsApp-style Chat with Attachments)
-// @route   PUT /:id/remark
-// @access  Private
-router.put('/:id/remark', protect, upload.any(), async (req, res) => {
-  try {
-    const section = getSection(req);
-    const text = (req.body.text || req.body.remark || '').trim();
-
-    let uploadedFiles = [];
-    if (req.files && Array.isArray(req.files)) {
-      uploadedFiles = req.files;
-    } else if (req.file) {
-      uploadedFiles = [req.file];
-    }
-
-    if (!text && uploadedFiles.length === 0) {
-      return res.status(400).json({ success: false, message: 'Please enter text or attach a file' });
-    }
-
-    const document = await GeneralDocument.findById(req.params.id);
-    if (!document) {
-      return res.status(404).json({ success: false, message: 'Document not found' });
-    }
-
-    const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
-
-    const attachments = uploadedFiles.map(f => ({
-      filePath: f.path,
-      originalName: f.originalname,
-      fileSize: f.size,
-      mimeType: f.mimetype
-    }));
-
-    const remarkEntry = {
-      text,
-      user: req.user._id || req.user.id,
-      userName: req.user.userId || req.user.name || 'User',
-      userRole: req.user.organization || req.user.role || 'Member',
-      createdAt: new Date(),
-      readBy: [currentUserId],
-      attachments
-    };
-
-    if (!document.remarks) {
-      document.remarks = [];
-    }
-
-    document.remarks.push(remarkEntry);
-    document.remark = text || (attachments.length > 0 ? `[Attachment: ${attachments[0].originalName}]` : '');
-
-    await document.save();
-
-    res.status(200).json({
-      success: true,
-      data: document
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
-
-
-
-// @desc    Upload a sub-document / revision for a parent document
-// @route   POST /:id/sub-document
-// @access  Private
-router.post('/:id/sub-document', protect, upload.single('file'), async (req, res) => {
-  try {
-    const section = getSection(req);
-    const document = await GeneralDocument.findById(req.params.id);
-    if (!document) {
-      return res.status(404).json({ success: false, message: 'Parent document not found' });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'Please upload a file' });
-    }
-
-    const { name } = req.body;
-    const subDoc = {
-      name: name || req.file.originalname,
-      originalName: req.file.originalname,
-      filePath: req.file.filename,
-      fileSize: req.file.size,
-      mimeType: req.file.mimetype,
-      uploadedBy: req.user._id || req.user.id,
-      uploadedByName: req.user.name || req.user.userId || req.user.email || 'coordination.mmrcl',
-      uploadedAt: new Date()
-    };
-
-    if (!document.subDocuments) {
-      document.subDocuments = [];
-    }
-
-    document.subDocuments.push(subDoc);
-    await document.save();
-
-    // Trigger non-blocking async Email Notification for sub-document revision
-    notifyNewDocumentUpload({
-      uploaderName: req.user.name || req.user.userId || 'PMIS User',
-      docName: `${document.name} (Revision: ${subDoc.name})`,
-      sectionName: section,
-      folderName: document.folder || 'Sub-Document',
-      originalFileName: req.file.originalname,
-      uploadedAt: subDoc.uploadedAt,
-      docId: document._id.toString(),
-      docType: 'general'
-    }).catch(err => console.error('[EmailTrigger Error]', err));
-
-    res.status(201).json({
-      success: true,
-      data: document
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
-
-// @desc    Rename a sub-document
-// @route   PUT /:id/sub-document/:subId/rename
-// @access  Private
-router.put('/:id/sub-document/:subId/rename', protect, async (req, res) => {
-  try {
-    const section = getSection(req);
-    const document = await GeneralDocument.findById(req.params.id);
-    if (!document) {
-      return res.status(404).json({ success: false, message: 'Parent document not found' });
-    }
-
-    const { name } = req.body;
-    if (!name || !name.trim()) {
-      return res.status(400).json({ success: false, message: 'Please provide a valid name' });
-    }
-
-    const subDoc = document.subDocuments.id(req.params.subId);
-    if (!subDoc) {
-      return res.status(404).json({ success: false, message: 'Sub-document not found' });
-    }
-
-    subDoc.name = name.trim();
-    await document.save();
-
-    res.status(200).json({
-      success: true,
-      data: document
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
-
-// @desc    Delete a sub-document
-// @route   DELETE /:id/sub-document/:subId
-// @access  Private
-router.delete('/:id/sub-document/:subId', protect, async (req, res) => {
-  try {
-    const section = getSection(req);
-    const document = await GeneralDocument.findById(req.params.id);
-    if (!document) {
-      return res.status(404).json({ success: false, message: 'Parent document not found' });
-    }
-
-    const subDoc = document.subDocuments.id(req.params.subId);
-    if (!subDoc) {
-      return res.status(404).json({ success: false, message: 'Sub-document not found' });
-    }
-
-    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
-    if (subDoc.filePath && typeof subDoc.filePath === 'string') {
-      const filePath = path.join(uploadDir, path.basename(subDoc.filePath));
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (e) {
-          console.error('Error removing file:', e);
-        }
-      }
-    }
-
-    document.subDocuments.pull(req.params.subId);
-    await document.save();
-
-    res.status(200).json({
-      success: true,
-      data: document
     });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -1863,61 +1432,161 @@ const notificationBaseline = new Date('2026-08-20T16:50:00.000Z');
 // @access  Private
 router.get('/all-uploads', protect, async (req, res) => {
   try {
+    // 1. Fetch recent documents across all sections, sorting strictly by uploadedAt and _id descending
     const documents = await GeneralDocument.find({
-      uploadedAt: { $gte: notificationBaseline }
+      $or: [
+        { uploadedAt: { $gte: notificationBaseline } },
+        { createdAt: { $gte: notificationBaseline } },
+        { uploadedAt: { $exists: false } }
+      ]
     })
-      .populate('uploadedBy', 'name role userId')
-      .sort({ updatedAt: -1 })
-      .limit(60)
+      .sort({ uploadedAt: -1, _id: -1 })
+      .limit(100)
       .lean();
 
-    // Map folder ObjectId to human-readable folder name
-    const folderIds = documents
-      .map(d => d.folder)
-      .filter(f => f && f !== 'Root' && mongoose.isValidObjectId(f));
+    // Accurately resolve uploaders using centralized resolver
+    await populateDocumentUploaders(documents);
 
-    const folders = await GeneralFolder.find({ _id: { $in: folderIds } }).select('_id name');
+    // 2. Fetch all folders from both generalfolders and tenderfolders to resolve complete hierarchical folder paths
+    const [generalFolders, tenderFolders] = await Promise.all([
+      GeneralFolder.find({}).select('_id name parentFolder section category').lean(),
+      TenderFolder.find({}).select('_id name parentFolder').lean()
+    ]);
+
     const folderMap = {};
-    folders.forEach(f => {
-      folderMap[f._id.toString()] = f.name;
+    const folderParentMap = {};
+    [...generalFolders, ...tenderFolders].forEach(f => {
+      const fId = f._id.toString();
+      folderMap[fId] = f.name;
+      if (f.parentFolder) {
+        folderParentMap[fId] = (f.parentFolder._id || f.parentFolder).toString();
+      }
     });
 
+    // Recursive / iterative path builder: e.g. "Letter Correspondence / Letter NECPL to PMC"
+    const getFullFolderPath = (folderId) => {
+      if (!folderId || folderId === 'Root') return 'Root Folder';
+      const fIdStr = folderId.toString();
+      if (!folderMap[fIdStr]) {
+        return folderId;
+      }
+
+      const hierarchy = [folderMap[fIdStr]];
+      let currId = fIdStr;
+      let depth = 0;
+      while (folderParentMap[currId] && depth < 5) {
+        const pId = folderParentMap[currId];
+        if (folderMap[pId]) {
+          hierarchy.unshift(folderMap[pId]);
+          currId = pId;
+        } else {
+          break;
+        }
+        depth++;
+      }
+      return hierarchy.join(' / ');
+    };
+
+    const getLeafFolderName = (folderId) => {
+      if (!folderId || folderId === 'Root') return 'Root Folder';
+      const fIdStr = folderId.toString();
+      return folderMap[fIdStr] || folderId;
+    };
+
+    // Standardized section naming matching sidebar exactly
     const getHumanSectionName = (sec) => {
-      if (sec === 'tender') return 'Tender Documents';
-      if (sec === 'contractual') return 'Contractual Documents';
-      if (sec === 'monitor') return 'Project Monitoring & Control';
-      if (sec === 'drawing') return 'Project Drawings';
-      if (sec === 'quality') return 'Quality Management';
-      if (sec === 'ehs') return 'Environment, Health, and Safety (EHS)';
-      if (sec === 'mep') return 'MEP & IT';
-      if (sec === 'registrations') return 'Project Documents & Registration';
-      if (sec === 'approved_nocs') return 'Approval & NOCs';
-      if (sec === 'rfi') return 'RFI';
-      return sec || 'General';
+      if (!sec) return 'General';
+      const s = sec.toLowerCase();
+      if (s === 'tender' || s === 'tender documents') return 'Tender Documents';
+      if (s === 'contractual' || s === 'contractual documents') return 'Contractual Documents';
+      if (s === 'ra_bill' || s.includes('bill') || s.includes('invoice')) return 'RA Bill Tax Invoice';
+      if (s === 'monitor' || s.includes('monitor')) return 'Site Monitoring & Control';
+      if (s === 'drawing' || s.includes('drawing')) return 'Project Drawings';
+      if (s === 'quality' || s.includes('quality')) return 'Quality Management';
+      if (s === 'ehs' || s.includes('safety') || s.includes('ehs')) return 'Environment, Health, and Safety (EHS)';
+      if (s === 'mep' || s.includes('mep')) return 'MEP & IT';
+      if (s === 'registrations' || s.includes('registration') || s.includes('communication') || s.includes('letter')) return 'Project Communication & Letters';
+      if (s === 'approved_nocs' || s.includes('noc')) return 'Approval & NOCs';
+      if (s === 'ncr' || s.includes('ncr')) return 'Non-Conformance Report (NCR)';
+      if (s === 'rfi' || s.includes('rfi')) return 'RFI Register';
+      return sec;
+    };
+
+    // Construct clear breadcrumb: Section > Structure/Category > Folder
+    const buildBreadcrumbPath = (secName, catName, folderPath) => {
+      const parts = [secName];
+      if (catName && catName !== '-' && catName !== 'null' && catName !== secName) {
+        parts.push(catName);
+      }
+      if (folderPath && folderPath !== 'Root Folder' && folderPath !== catName) {
+        parts.push(folderPath);
+      } else if (folderPath === 'Root Folder' && parts.length === 1) {
+        parts.push('Root Folder');
+      }
+      return parts.join(' > ');
     };
 
     const notifications = [];
 
     documents.forEach(d => {
-      const folderName = folderMap[d.folder] || (d.folder && d.folder !== 'Root' ? d.folder : 'Root Folder');
+      const folderPath = getFullFolderPath(d.folder);
+      const leafFolder = getLeafFolderName(d.folder);
       const secName = getHumanSectionName(d.section);
+      const catName = d.category && d.category !== '-' && d.category !== 'null' ? d.category.trim() : '';
+      const breadcrumb = buildBreadcrumbPath(secName, catName, folderPath);
+      const uploaderName = d.uploadedByName || d.uploadedBy?.name || d.uploadedBy?.userId || 'NECPL';
 
       // 1. New File Upload Event
       notifications.push({
         _id: d._id.toString(),
         docId: d._id.toString(),
         type: 'upload',
-        title: d.originalName || d.title || 'Untitled File',
-        name: d.originalName || d.title || 'Untitled File',
+        title: d.name || d.originalName || 'Untitled File',
+        name: d.name || d.originalName || 'Untitled File',
+        originalName: d.originalName || d.name,
         section: secName,
         apiSection: d.section,
-        folderName: folderName,
-        uploader: d.uploadedBy?.name || d.uploadedBy?.userId || 'NECPL',
+        category: catName,
+        folder: d.folder,
+        folderName: folderPath,
+        leafFolderName: leafFolder,
+        fullPath: breadcrumb,
+        uploader: uploaderName,
         createdAt: d.uploadedAt || d.createdAt,
         uploadedAt: d.uploadedAt || d.createdAt,
         viewedBy: d.viewedBy || [],
         docRef: d
       });
+
+      // 1b. Sub-document / Revision Upload Events
+      if (Array.isArray(d.subDocuments) && d.subDocuments.length > 0) {
+        d.subDocuments.forEach((sub, sIdx) => {
+          const subCreatedAt = sub.uploadedAt || sub.createdAt || d.uploadedAt;
+          const subUploader = sub.uploadedByName || sub.uploadedBy?.name || uploaderName;
+          notifications.push({
+            _id: `${d._id.toString()}_sub_${sub._id || sIdx}`,
+            docId: d._id.toString(),
+            subDocId: sub._id ? sub._id.toString() : undefined,
+            type: 'upload',
+            isSubDoc: true,
+            title: sub.name || sub.originalName || 'Untitled File',
+            name: sub.name || sub.originalName || 'Untitled File',
+            originalName: sub.originalName || sub.name,
+            section: secName,
+            apiSection: d.section,
+            category: catName,
+            folder: d.folder,
+            folderName: folderPath,
+            leafFolderName: leafFolder,
+            fullPath: breadcrumb,
+            uploader: subUploader,
+            createdAt: subCreatedAt,
+            uploadedAt: subCreatedAt,
+            viewedBy: sub.viewedBy || d.viewedBy || [],
+            docRef: d
+          });
+        });
+      }
 
       // 2. Remarks Added Events
       if (d.remarks && d.remarks.length > 0) {
@@ -1926,15 +1595,20 @@ router.get('/all-uploads', protect, async (req, res) => {
             _id: `${d._id.toString()}_rem_${rem._id || idx}`,
             docId: d._id.toString(),
             type: 'remark',
-            title: d.originalName || d.title || 'Untitled File',
-            name: d.originalName || d.title || 'Untitled File',
+            title: d.name || d.originalName || 'Untitled File',
+            name: d.name || d.originalName || 'Untitled File',
+            originalName: d.originalName || d.name,
             section: secName,
             apiSection: d.section,
-            folderName: folderName,
+            category: catName,
+            folder: d.folder,
+            folderName: folderPath,
+            leafFolderName: leafFolder,
+            fullPath: breadcrumb,
             uploader: rem.userName || rem.userRole || 'User',
             remarkText: rem.text || '',
-            createdAt: rem.createdAt || d.updatedAt,
-            uploadedAt: rem.createdAt || d.updatedAt,
+            createdAt: rem.createdAt || d.updatedAt || d.uploadedAt,
+            uploadedAt: rem.createdAt || d.updatedAt || d.uploadedAt,
             viewedBy: rem.readBy || d.viewedBy || [],
             docRef: d
           });
@@ -1947,11 +1621,16 @@ router.get('/all-uploads', protect, async (req, res) => {
           _id: `${d._id.toString()}_app`,
           docId: d._id.toString(),
           type: 'approval',
-          title: d.originalName || d.title || 'Untitled File',
-          name: d.originalName || d.title || 'Untitled File',
+          title: d.name || d.originalName || 'Untitled File',
+          name: d.name || d.originalName || 'Untitled File',
+          originalName: d.originalName || d.name,
           section: secName,
           apiSection: d.section,
-          folderName: folderName,
+          category: catName,
+          folder: d.folder,
+          folderName: folderPath,
+          leafFolderName: leafFolder,
+          fullPath: breadcrumb,
           uploader: d.approvedBy,
           approvalStatus: d.approvalStatus || 'Approved',
           createdAt: d.updatedAt || d.uploadedAt,

@@ -59,6 +59,18 @@ const createTransporter = () => {
   }
 };
 
+// In-memory deduplication cache to prevent sending duplicate emails for the same document/file within 24 hours
+const recentDispatchedEmails = new Map();
+
+setInterval(() => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [key, timestamp] of recentDispatchedEmails.entries()) {
+    if (timestamp < cutoff) {
+      recentDispatchedEmails.delete(key);
+    }
+  }
+}, 60 * 60 * 1000).unref();
+
 /**
  * Sends an automated HTML email notification to all 14 registered users upon document upload
  */
@@ -73,6 +85,27 @@ const notifyNewDocumentUpload = async ({
   docType = 'general'
 }) => {
   try {
+    // 1. Guard against triggering emails for older historical documents (older than 24 hours)
+    if (uploadedAt) {
+      const uploadTime = new Date(uploadedAt).getTime();
+      if (!isNaN(uploadTime) && Date.now() - uploadTime > 24 * 60 * 60 * 1000) {
+        console.log(`[EmailTrigger Guard] Suppressing notification for existing historical document: "${docName}" (uploadedAt: ${uploadedAt})`);
+        return { success: true, suppressed: 'historical_document' };
+      }
+    }
+
+    // 2. Guard against duplicate email triggers for identical document/file within 24 hours
+    const emailDedupKey = `${sectionName}_${folderName}_${docName}_${originalFileName}`.toLowerCase().trim();
+    if (recentDispatchedEmails.has(emailDedupKey)) {
+      const lastSent = recentDispatchedEmails.get(emailDedupKey);
+      if (Date.now() - lastSent < 24 * 60 * 60 * 1000) {
+        console.log(`[EmailTrigger Guard] Suppressing duplicate email notification: "${emailDedupKey}" (already sent at ${new Date(lastSent).toLocaleTimeString()})`);
+        return { success: true, suppressed: 'duplicate_suppressed' };
+      }
+    }
+    // Record key immediately so concurrent/rapid calls are deduped
+    recentDispatchedEmails.set(emailDedupKey, Date.now());
+
     // Collect all registered email addresses from Database
     let recipientEmails = [...DEFAULT_RECIPIENTS];
     try {
@@ -208,6 +241,7 @@ Body: Uploaded by ${uploaderName} -> ${docName} (${sectionName} / ${folderName})
     };
 
     const info = await transporter.sendMail(mailOptions);
+    recentDispatchedEmails.set(emailDedupKey, Date.now());
     console.log(`[EmailTrigger] Email sent successfully! MessageId: ${info.messageId}`);
     return { success: true, messageId: info.messageId };
 
