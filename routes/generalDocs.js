@@ -262,19 +262,43 @@ async function populateDocumentUploaders(documents) {
       return { obj: currentName, name: currentName };
     }
 
-    return { obj: 'User', name: 'User' };
+    // 6. Section & Folder Context Fallbacks
+    const sec = (docSection || '').toString().toLowerCase();
+    const fStr = (folderId || '').toString().toUpperCase();
+
+    if (sec === 'monitor' || sec.includes('monitor') || fStr.includes('MOM') || fStr.includes('MINUTES') || fStr.includes('AGENDA') || fStr.includes('NYATI')) {
+      return { obj: 'PMC Office', name: 'PMC Office' };
+    }
+    if (sec === 'tender' || sec.includes('tender')) {
+      return { obj: 'coordination.mmrcl', name: 'coordination.mmrcl' };
+    }
+    if (sec === 'rfi' || sec.includes('rfi')) {
+      return { obj: 'NECPL', name: 'NECPL' };
+    }
+    if (sec === 'quality' || sec === 'ehs') {
+      return { obj: 'PMC Office', name: 'PMC Office' };
+    }
+    if (sec === 'drawing') {
+      return { obj: 'coordination.mmrcl', name: 'coordination.mmrcl' };
+    }
+    if (sec === 'contractual') {
+      return { obj: 'coordination.mmrcl', name: 'coordination.mmrcl' };
+    }
+
+    return { obj: 'coordination.mmrcl', name: 'coordination.mmrcl' };
   };
 
   docsList.forEach(doc => {
-    const res = resolveUploader(doc.uploadedBy, doc.uploadedByName, doc.folder, doc.name, doc.originalName);
-    if (res.obj && res.obj !== 'User') doc.uploadedBy = res.obj;
-    if (res.name && res.name !== 'User') doc.uploadedByName = res.name;
+    const docSec = doc.section || '';
+    const res = resolveUploader(doc.uploadedBy, doc.uploadedByName, doc.folder, doc.name, doc.originalName, docSec);
+    doc.uploadedBy = res.obj;
+    doc.uploadedByName = res.name;
 
     if (Array.isArray(doc.subDocuments)) {
       doc.subDocuments.forEach(sd => {
-        const sdRes = resolveUploader(sd.uploadedBy, sd.uploadedByName, doc.folder, sd.name, sd.originalName);
-        if (sdRes.obj && sdRes.obj !== 'User') sd.uploadedBy = sdRes.obj;
-        if (sdRes.name && sdRes.name !== 'User') sd.uploadedByName = sdRes.name;
+        const sdRes = resolveUploader(sd.uploadedBy, sd.uploadedByName, doc.folder, sd.name, sd.originalName, docSec);
+        sd.uploadedBy = sdRes.obj;
+        sd.uploadedByName = sdRes.name;
       });
     }
   });
