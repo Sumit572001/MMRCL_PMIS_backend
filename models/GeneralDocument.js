@@ -28,6 +28,7 @@ const GeneralDocumentSchema = new mongoose.Schema({
     required: true
   },
   uploadedBy: { type: mongoose.Schema.Types.Mixed },
+  uploadedByName: { type: String, default: 'User' },
   uploadedAt: {
     type: Date,
     default: Date.now
@@ -89,6 +90,7 @@ const GeneralDocumentSchema = new mongoose.Schema({
       attachments: [
         {
           filePath: { type: String },
+          filename: { type: String },
           originalName: { type: String },
           fileSize: { type: Number },
           mimeType: { type: String }
@@ -126,8 +128,9 @@ const GeneralDocumentSchema = new mongoose.Schema({
           createdAt: { type: Date, default: Date.now },
           readBy: [{ type: String }],
           attachments: [
-            {
-              filePath: { type: String },
+        {
+          filePath: { type: String },
+          filename: { type: String },
               originalName: { type: String },
               fileSize: { type: Number },
               mimeType: { type: String }

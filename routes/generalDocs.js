@@ -6,6 +6,7 @@ const fs = require('fs');
 const mongoose = require('mongoose');
 const GeneralDocument = require('../models/GeneralDocument');
 const GeneralFolder = require('../models/GeneralFolder');
+const User = require('../models/User');
 const { protect, authorize } = require('../middleware/auth');
 const { notifyNewDocumentUpload } = require('../utils/emailService');
 
@@ -19,15 +20,66 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: function (req, file, cb) {
-    const section = (req.section || req.params.section || 'general').toLowerCase();
+    const rawSection = (req.section || req.params.section || 'general').toLowerCase();
+    const safeSection = rawSection.replace(/[^a-zA-Z0-9_-]/g, '_');
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, section + '-' + uniqueSuffix + path.extname(file.originalname));
+    cb(null, safeSection + '-' + uniqueSuffix + path.extname(file.originalname));
   }
 });
 
 const upload = multer({
   storage: storage
 });
+
+// Helper to safely find physical file on disk from relative, absolute, or storage paths
+function findPhysicalFile(filePathOrName, originalName) {
+  if (!filePathOrName && !originalName) return null;
+  const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+  const candidates = [];
+
+  if (filePathOrName && typeof filePathOrName === 'string') {
+    const raw = filePathOrName.trim();
+    candidates.push(path.resolve(raw));
+    candidates.push(path.resolve(path.join(__dirname, '..', raw)));
+    candidates.push(path.resolve(path.join(__dirname, '..', uploadDir, path.basename(raw))));
+    candidates.push(path.resolve(path.join(__dirname, '..', uploadDir, raw)));
+    try {
+      const decoded = decodeURIComponent(raw);
+      if (decoded !== raw) {
+        candidates.push(path.resolve(decoded));
+        candidates.push(path.resolve(path.join(__dirname, '..', decoded)));
+        candidates.push(path.resolve(path.join(__dirname, '..', uploadDir, path.basename(decoded))));
+      }
+    } catch (e) {}
+  }
+
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) {
+        const stat = fs.statSync(c);
+        if (stat.isFile()) return c;
+      }
+    } catch (e) {}
+  }
+
+  // Fallback: search upload directory for originalName
+  if (originalName && typeof originalName === 'string') {
+    try {
+      const dirPath = path.resolve(path.join(__dirname, '..', uploadDir));
+      if (fs.existsSync(dirPath)) {
+        const files = fs.readdirSync(dirPath);
+        const exactMatch = files.find(f => f.toLowerCase() === originalName.toLowerCase());
+        if (exactMatch) return path.join(dirPath, exactMatch);
+
+        const suffixMatch = files.find(f => f.toLowerCase().endsWith(originalName.toLowerCase()));
+        if (suffixMatch) return path.join(dirPath, suffixMatch);
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+
 
 const mepCategories = [
   '1. Operation and Maintenance Manuals',
@@ -79,6 +131,91 @@ const defaultFoldersBySection = {
 };
 
 // Helper to get section safely
+
+// Safely populate uploadedBy and subDocuments.uploadedBy across documents without throwing CastError on string IDs
+async function populateDocumentUploaders(documents) {
+  if (!documents) return documents;
+  const isArray = Array.isArray(documents);
+  const docsList = isArray ? documents : [documents];
+  if (docsList.length === 0) return documents;
+
+  const userIds = new Set();
+  const hex24Regex = /^[0-9a-fA-F]{24}$/;
+
+  docsList.forEach(doc => {
+    if (doc.uploadedBy) {
+      const uId = (doc.uploadedBy._id || doc.uploadedBy).toString();
+      if (hex24Regex.test(uId)) userIds.add(uId);
+    }
+    if (Array.isArray(doc.subDocuments)) {
+      doc.subDocuments.forEach(sd => {
+        if (sd.uploadedBy) {
+          const sdId = (sd.uploadedBy._id || sd.uploadedBy).toString();
+          if (hex24Regex.test(sdId)) userIds.add(sdId);
+        }
+      });
+    }
+  });
+
+  let userMap = {};
+  if (userIds.size > 0) {
+    const users = await User.find({ _id: { $in: Array.from(userIds) } }, 'name email userId role organization').lean();
+    users.forEach(u => {
+      userMap[u._id.toString()] = u;
+    });
+  }
+
+  docsList.forEach(doc => {
+    if (doc.uploadedBy) {
+      const uIdStr = (doc.uploadedBy._id || doc.uploadedBy).toString();
+      if (userMap[uIdStr]) {
+        const u = userMap[uIdStr];
+        doc.uploadedBy = {
+          _id: u._id,
+          name: u.name,
+          email: u.email,
+          userId: u.userId,
+          role: u.role,
+          organization: u.organization
+        };
+        doc.uploadedByName = u.name || u.userId || 'User';
+      } else if (typeof doc.uploadedBy === 'string' && !hex24Regex.test(doc.uploadedBy)) {
+        doc.uploadedByName = doc.uploadedByName || doc.uploadedBy;
+      }
+    }
+    if (!doc.uploadedByName && typeof doc.uploadedBy === 'object' && doc.uploadedBy?.name) {
+      doc.uploadedByName = doc.uploadedBy.name;
+    }
+
+    if (Array.isArray(doc.subDocuments)) {
+      doc.subDocuments.forEach(sd => {
+        if (sd.uploadedBy) {
+          const sdIdStr = (sd.uploadedBy._id || sd.uploadedBy).toString();
+          if (userMap[sdIdStr]) {
+            const u = userMap[sdIdStr];
+            sd.uploadedBy = {
+              _id: u._id,
+              name: u.name,
+              email: u.email,
+              userId: u.userId,
+              role: u.role,
+              organization: u.organization
+            };
+            sd.uploadedByName = u.name || u.userId || 'User';
+          } else if (typeof sd.uploadedBy === 'string' && !hex24Regex.test(sd.uploadedBy)) {
+            sd.uploadedByName = sd.uploadedByName || sd.uploadedBy;
+          }
+        }
+        if (!sd.uploadedByName && typeof sd.uploadedBy === 'object' && sd.uploadedBy?.name) {
+          sd.uploadedByName = sd.uploadedBy.name;
+        }
+      });
+    }
+  });
+
+  return isArray ? docsList : docsList[0];
+}
+
 const getSection = (req) => {
   const raw = (req.section || req.params.section || 'general').toLowerCase();
   if (raw.includes('monitor')) return 'monitor';
@@ -338,13 +475,15 @@ router.get('/', protect, async (req, res) => {
   try {
     const rawSection = (req.section || req.params.section || 'general').toLowerCase();
     const section = getSection(req);
-    const documents = await GeneralDocument.find({
+    let documents = await GeneralDocument.find({
       $or: [
         { section: section },
         { section: rawSection },
         { section: new RegExp(section, 'i') }
       ]
-    }).populate('uploadedBy', 'name role').sort({ uploadedAt: -1 });
+    }).sort({ uploadedAt: -1 }).lean();
+
+    documents = await populateDocumentUploaders(documents);
 
     res.status(200).json({
       success: true,
@@ -361,10 +500,11 @@ router.get('/', protect, async (req, res) => {
 // @access  Private
 router.get('/doc-by-id/:id', protect, async (req, res) => {
   try {
-    const document = await GeneralDocument.findById(req.params.id).populate('uploadedBy', 'name role');
+    let document = await GeneralDocument.findById(req.params.id).lean();
     if (!document) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
+    document = await populateDocumentUploaders(document);
     res.status(200).json({
       success: true,
       data: document
@@ -489,7 +629,8 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       originalName: req.file.originalname,
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
-      uploadedBy: req.user.id,
+      uploadedBy: req.user._id || req.user.id,
+      uploadedByName: req.user.name || req.user.userId || 'User',
       viewedBy: [currentUserId],
       ...(isNcrSection ? {
         ncStatus: 'NC Pending',
@@ -533,19 +674,12 @@ router.get('/download/:id', protect, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
 
-    let resolvedPath = path.resolve(document.filePath);
-    if (!fs.existsSync(resolvedPath)) {
-      resolvedPath = path.resolve(path.join(__dirname, '..', document.filePath));
-    }
-    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
-    if (!fs.existsSync(resolvedPath)) {
-      resolvedPath = path.resolve(path.join(__dirname, '..', uploadDir, path.basename(document.filePath)));
-    }
-    if (!fs.existsSync(resolvedPath)) {
+    const resolvedPath = findPhysicalFile(document.filePath || document.fileName || document.filename, document.originalName || document.fileName || document.title);
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
       return res.status(404).json({ success: false, message: 'Physical file not found on server storage' });
     }
 
-    res.download(resolvedPath, document.originalName);
+    res.download(resolvedPath, document.originalName || document.fileName || path.basename(resolvedPath));
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -699,7 +833,8 @@ router.put('/:id/remark', protect, upload.any(), async (req, res) => {
     const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
 
     const attachments = uploadedFiles.map(f => ({
-      filePath: f.path,
+      filename: f.filename || path.basename(f.path),
+      filePath: f.path || f.filename,
       originalName: f.originalname,
       fileSize: f.size,
       mimeType: f.mimetype
@@ -738,12 +873,80 @@ router.put('/:id/remark', protect, upload.any(), async (req, res) => {
 // @access  Private
 router.get('/remark-attachment/:filename', protect, async (req, res) => {
   try {
-    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
-    const filePath = path.join(uploadDir, path.basename(req.params.filename));
-    if (!fs.existsSync(filePath)) {
+    const rawFilename = req.params.filename || '';
+    let decodedFilename = rawFilename;
+    try {
+      decodedFilename = decodeURIComponent(rawFilename);
+    } catch (e) {}
+    const requestedOriginalName = req.query.originalName ? decodeURIComponent(req.query.originalName) : '';
+
+    let resolvedPath = findPhysicalFile(rawFilename, requestedOriginalName);
+    if (!resolvedPath && rawFilename !== decodedFilename) {
+      resolvedPath = findPhysicalFile(decodedFilename, requestedOriginalName);
+    }
+
+    // Fallback: If not found on disk directly, query MongoDB for this attachment
+    if (!resolvedPath) {
+      const searchTerms = [
+        rawFilename,
+        decodedFilename,
+        path.basename(rawFilename),
+        path.basename(decodedFilename)
+      ];
+      if (requestedOriginalName) searchTerms.push(requestedOriginalName);
+
+      const docMatch = await GeneralDocument.findOne({
+        $or: [
+          { 'remarks.attachments.filePath': { $in: searchTerms } },
+          { 'remarks.attachments.filename': { $in: searchTerms } },
+          { 'remarks.attachments.originalName': { $in: searchTerms } },
+          { 'subDocuments.remarks.attachments.filePath': { $in: searchTerms } },
+          { 'subDocuments.remarks.attachments.filename': { $in: searchTerms } },
+          { 'subDocuments.remarks.attachments.originalName': { $in: searchTerms } }
+        ]
+      }).lean();
+
+      if (docMatch) {
+        let matchedAtt = null;
+        for (const r of (docMatch.remarks || [])) {
+          for (const a of (r.attachments || [])) {
+            if (searchTerms.some(term => term && (a.filePath === term || a.filename === term || a.originalName === term || path.basename(a.filePath || '') === term))) {
+              matchedAtt = a;
+              break;
+            }
+          }
+          if (matchedAtt) break;
+        }
+        if (!matchedAtt && docMatch.subDocuments) {
+          for (const s of docMatch.subDocuments) {
+            for (const r of (s.remarks || [])) {
+              for (const a of (r.attachments || [])) {
+                if (searchTerms.some(term => term && (a.filePath === term || a.filename === term || a.originalName === term || path.basename(a.filePath || '') === term))) {
+                  matchedAtt = a;
+                  break;
+                }
+              }
+              if (matchedAtt) break;
+            }
+            if (matchedAtt) break;
+          }
+        }
+
+        if (matchedAtt) {
+          resolvedPath = findPhysicalFile(matchedAtt.filePath || matchedAtt.filename, matchedAtt.originalName);
+        }
+      }
+    }
+
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
       return res.status(404).json({ success: false, message: 'Attachment file not found' });
     }
-    res.sendFile(path.resolve(filePath));
+
+    const downloadName = requestedOriginalName || path.basename(resolvedPath);
+    if (req.query.download === 'true') {
+      return res.download(resolvedPath, downloadName);
+    }
+    return res.sendFile(path.resolve(resolvedPath));
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -996,7 +1199,8 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       originalName: req.file.originalname,
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
-      uploadedBy: req.user.id,
+      uploadedBy: req.user._id || req.user.id,
+      uploadedByName: req.user.name || req.user.userId || 'User',
       viewedBy: [currentUserId],
       ...(isNcrSection ? {
         ncStatus: 'NC Pending',
@@ -1240,21 +1444,7 @@ router.put('/:id/remark', protect, upload.any(), async (req, res) => {
   }
 });
 
-// @desc    View/Download remark attachment
-// @route   GET /remark-attachment/:filename
-// @access  Private
-router.get('/remark-attachment/:filename', protect, async (req, res) => {
-  try {
-    const uploadDir = process.env.UPLOAD_DIR || 'uploads';
-    const filePath = path.join(uploadDir, path.basename(req.params.filename));
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, message: 'Attachment file not found' });
-    }
-    res.sendFile(path.resolve(filePath));
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-});
+
 
 // @desc    Upload a sub-document / revision for a parent document
 // @route   POST /:id/sub-document
@@ -1413,7 +1603,8 @@ router.post('/:id/sub-document/:subId/remark', protect, (req, res, next) => {
     const currentUserId = (req.user._id || req.user.id || req.user.userId || 'user').toString();
 
     const attachments = (req.files || []).map(f => ({
-      filePath: f.filename,
+      filename: f.filename || path.basename(f.path),
+      filePath: f.path || f.filename,
       originalName: f.originalname,
       fileSize: f.size,
       mimeType: f.mimetype
