@@ -178,13 +178,20 @@ async function populateDocumentUploaders(documents) {
           role: u.role,
           organization: u.organization
         };
-        doc.uploadedByName = u.name || u.userId || 'User';
+        doc.uploadedByName = u.name || u.userId || u.email || 'coordination.mmrcl';
       } else if (typeof doc.uploadedBy === 'string' && !hex24Regex.test(doc.uploadedBy)) {
-        doc.uploadedByName = doc.uploadedByName || doc.uploadedBy;
+        doc.uploadedByName = (doc.uploadedByName && doc.uploadedByName !== 'User') ? doc.uploadedByName : doc.uploadedBy;
+      } else {
+        if (!doc.uploadedByName || doc.uploadedByName === 'User') {
+          doc.uploadedByName = 'coordination.mmrcl';
+        }
       }
     }
-    if (!doc.uploadedByName && typeof doc.uploadedBy === 'object' && doc.uploadedBy?.name) {
+    if ((!doc.uploadedByName || doc.uploadedByName === 'User') && typeof doc.uploadedBy === 'object' && doc.uploadedBy?.name) {
       doc.uploadedByName = doc.uploadedBy.name;
+    }
+    if (!doc.uploadedByName || doc.uploadedByName === 'User') {
+      doc.uploadedByName = 'coordination.mmrcl';
     }
 
     if (Array.isArray(doc.subDocuments)) {
@@ -201,13 +208,20 @@ async function populateDocumentUploaders(documents) {
               role: u.role,
               organization: u.organization
             };
-            sd.uploadedByName = u.name || u.userId || 'User';
+            sd.uploadedByName = u.name || u.userId || u.email || 'coordination.mmrcl';
           } else if (typeof sd.uploadedBy === 'string' && !hex24Regex.test(sd.uploadedBy)) {
-            sd.uploadedByName = sd.uploadedByName || sd.uploadedBy;
+            sd.uploadedByName = (sd.uploadedByName && sd.uploadedByName !== 'User') ? sd.uploadedByName : sd.uploadedBy;
+          } else {
+            if (!sd.uploadedByName || sd.uploadedByName === 'User') {
+              sd.uploadedByName = 'coordination.mmrcl';
+            }
           }
         }
-        if (!sd.uploadedByName && typeof sd.uploadedBy === 'object' && sd.uploadedBy?.name) {
+        if ((!sd.uploadedByName || sd.uploadedByName === 'User') && typeof sd.uploadedBy === 'object' && sd.uploadedBy?.name) {
           sd.uploadedByName = sd.uploadedBy.name;
+        }
+        if (!sd.uploadedByName || sd.uploadedByName === 'User') {
+          sd.uploadedByName = 'coordination.mmrcl';
         }
       });
     }
@@ -630,7 +644,7 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       uploadedBy: req.user._id || req.user.id,
-      uploadedByName: req.user.name || req.user.userId || 'User',
+      uploadedByName: req.user.name || req.user.userId || req.user.email || 'coordination.mmrcl',
       viewedBy: [currentUserId],
       ...(isNcrSection ? {
         ncStatus: 'NC Pending',
@@ -975,7 +989,7 @@ router.post('/:id/sub-document', protect, upload.single('file'), async (req, res
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       uploadedBy: req.user._id || req.user.id,
-      uploadedByName: req.user.userId || req.user.name || 'User',
+      uploadedByName: req.user.name || req.user.userId || req.user.email || 'coordination.mmrcl',
       uploadedAt: new Date()
     };
 
@@ -1200,7 +1214,7 @@ router.post('/', protect, upload.single('file'), async (req, res) => {
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       uploadedBy: req.user._id || req.user.id,
-      uploadedByName: req.user.name || req.user.userId || 'User',
+      uploadedByName: req.user.name || req.user.userId || req.user.email || 'coordination.mmrcl',
       viewedBy: [currentUserId],
       ...(isNcrSection ? {
         ncStatus: 'NC Pending',
@@ -1469,7 +1483,7 @@ router.post('/:id/sub-document', protect, upload.single('file'), async (req, res
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       uploadedBy: req.user._id || req.user.id,
-      uploadedByName: req.user.userId || req.user.name || 'User',
+      uploadedByName: req.user.name || req.user.userId || req.user.email || 'coordination.mmrcl',
       uploadedAt: new Date()
     };
 
