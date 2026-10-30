@@ -175,7 +175,7 @@ async function populateDocumentUploaders(documents) {
     }
   } catch (e) {}
 
-  const resolveUploader = (uploaderField, currentName, folderId, docName, origName) => {
+  const resolveUploader = (uploaderField, currentName, folderId, docName, origName, docSection) => {
     // 1. If uploaderField is a user object
     if (uploaderField && typeof uploaderField === 'object') {
       const oId = (uploaderField._id || uploaderField.id)?.toString();
