@@ -28,6 +28,50 @@ const sendTokenResponse = (user, statusCode, res) => {
   });
 };
 
+// =========================================================================
+// PRE-AUTHORIZED REGISTRATION EMAILS & USER IDS (WHITELIST)
+// A user CANNOT register or create a password unless their Email ID is in this list.
+// To allow a new user to register, add their Email ID here:
+// =========================================================================
+const AUTHORIZED_REGISTRATION_EMAILS = [
+  'md.aasim@mmrcl.com',
+  'rajesh.patil@mmrcl.com',
+  'sachin.aher@mmrcl.com',
+  'vikrant.tewathia@mmrcl.com',
+  'vishwas.ajnalkar@mmrcl.com',
+  'ashish.saxena@mmrcl.com',
+  'neha.bhoi@mmrcl.com',
+  'rajeev.kumar@mmrcl.com',
+  'sudhir.sahare@mmrcl.com',
+  'rutesh.jadhav@mmrcl.com',
+  'sumit.patil@mmrcl.com',
+  'arch.mmrcl@gmail.com',
+  'pmc.mmrcl@gmail.com',
+  'coordination.mmrcl@nyatigroup.com',
+  'qualitypmc123@gmail.com',
+  'pmcsafety30@gmail.com',
+  'safety.mmrc@mmrcl.com',
+  'sumit.verma@nyatigroup.com',
+  'nyatigroup1997@gmail.com',
+  'sv0572001@gmail.com',
+  'necpl@pmis.com',
+  'mmrcl@pmis.com',
+  'pmc@pmis.com',
+  'contractor@pmis.com',
+  'engineer@pmis.com',
+  'employer@pmis.com',
+  // Official User IDs
+  'necpl',
+  'mmrcl',
+  'pmc',
+  'contractor',
+  'engineer',
+  'employer',
+  'quality_pmc',
+  'safety_pmc',
+  'safety_mmrcl'
+];
+
 // @desc    Register or update user
 // @route   POST /api/auth/register
 // @access  Public
@@ -47,6 +91,20 @@ router.post('/register', async (req, res) => {
     const cleanEmail = targetEmail.toLowerCase();
     const cleanUserId = (userId || targetEmail).trim();
     const safeRegexStr = cleanEmail.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+    // STRICT ACCESS CONTROL: Only pre-authorized Email IDs / User IDs are permitted to register
+    const isAuthorized = AUTHORIZED_REGISTRATION_EMAILS.some(
+      allowed => allowed.toLowerCase() === cleanEmail || allowed.toLowerCase() === (userId || targetEmail).trim().toLowerCase()
+    );
+
+    if (!isAuthorized) {
+      console.warn(`[Registration Blocked] Unauthorized registration attempt: "${cleanEmail}"`);
+      return res.status(403).json({
+        success: false,
+        unauthorized: true,
+        message: `This Email ID (${targetEmail}) is not registered in the system. Please get your email registered by the Admin first.`
+      });
+    }
 
     // Check if user exists by email or userId
     let user = await User.findOne({
@@ -76,6 +134,19 @@ router.post('/register', async (req, res) => {
           organization: user.organization
         }
       });
+    }
+
+    // Official defaults for known project accounts
+    const KNOWN_ACCOUNT_DEFAULTS = {
+      'qualitypmc123@gmail.com': { name: 'PMC Quality Team', role: 'Contractor', organization: 'PMC Quality Office' },
+      'pmcsafety30@gmail.com': { name: 'PMC Safety Team', role: 'Contractor', organization: 'PMC Safety Office' },
+      'safety.mmrc@mmrcl.com': { name: 'MMRCL Safety Team', role: "Employer's Office", organization: 'MMRCL Safety Office' }
+    };
+    if (KNOWN_ACCOUNT_DEFAULTS[cleanEmail]) {
+      const def = KNOWN_ACCOUNT_DEFAULTS[cleanEmail];
+      if (!name) name = def.name;
+      if (!role) role = def.role;
+      if (!organization) organization = def.organization;
     }
 
     // Set defaults for self-registered users
@@ -223,6 +294,16 @@ router.post('/send-otp', async (req, res) => {
     });
 
     if (!user) {
+      const isAuthorized = AUTHORIZED_REGISTRATION_EMAILS.some(
+        allowed => allowed.toLowerCase() === cleanEmail.toLowerCase()
+      );
+      if (!isAuthorized) {
+        return res.status(403).json({
+          success: false,
+          unauthorized: true,
+          message: 'This Email ID / User ID is not authorized. Please contact the administrator to get your email approved first.'
+        });
+      }
       const parts = cleanEmail.split('@');
       const defaultName = parts[0] || 'User';
       user = await User.create({

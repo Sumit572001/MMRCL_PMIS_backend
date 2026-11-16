@@ -2,7 +2,7 @@ let nodemailer = require('nodemailer');
 
 const User = require('../models/User');
 
-// Fallback recipient list containing all 14 official email addresses
+// Fallback recipient list containing all official email addresses
 const DEFAULT_RECIPIENTS = [
   'md.aasim@mmrcl.com',
   'rajesh.patil@mmrcl.com',
@@ -17,7 +17,10 @@ const DEFAULT_RECIPIENTS = [
   'sumit.patil@mmrcl.com',
   'arch.mmrcl@gmail.com',
   'pmc.mmrcl@gmail.com',
-  'coordination.mmrcl@nyatigroup.com'
+  'coordination.mmrcl@nyatigroup.com',
+  'qualitypmc123@gmail.com',
+  'pmcsafety30@gmail.com',
+  'safety.mmrc@mmrcl.com'
 ];
 
 // Excluded / Blocked email addresses that should NOT receive automated document upload notifications

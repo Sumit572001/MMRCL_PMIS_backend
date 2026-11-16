@@ -208,6 +208,30 @@ const usersData = [
     password: 'password123',
     role: "Employer's Office",
     organization: 'MMRCL Employer Office (Main)'
+  },
+  {
+    name: 'PMC Quality Team',
+    userId: 'QUALITY_PMC',
+    email: 'qualitypmc123@gmail.com',
+    password: 'Pmc@2026',
+    role: 'Contractor',
+    organization: 'PMC Quality Office'
+  },
+  {
+    name: 'PMC Safety Team',
+    userId: 'SAFETY_PMC',
+    email: 'pmcsafety30@gmail.com',
+    password: 'Pmc@2026',
+    role: 'Contractor',
+    organization: 'PMC Safety Office'
+  },
+  {
+    name: 'MMRCL Safety Team',
+    userId: 'SAFETY_MMRCL',
+    email: 'safety.mmrc@mmrcl.com',
+    password: 'Mmrcl@2026',
+    role: "Employer's Office",
+    organization: 'MMRCL Safety Office'
   }
 ];
 
