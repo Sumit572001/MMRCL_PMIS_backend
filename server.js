@@ -186,6 +186,14 @@ connectDB().then(async () => {
         password: 'Mmrcl@2026',
         role: "Employer's Office",
         organization: 'MMRCL Safety Office'
+      },
+      {
+        name: 'Vinod Nemade',
+        userId: 'VINOD.NEMADE',
+        email: 'vinod.nemade@nyatigroup.com',
+        password: 'Nyati@2026',
+        role: 'Contractor',
+        organization: 'NECPL'
       }
     ];
 

@@ -20,7 +20,8 @@ const DEFAULT_RECIPIENTS = [
   'coordination.mmrcl@nyatigroup.com',
   'qualitypmc123@gmail.com',
   'pmcsafety30@gmail.com',
-  'safety.mmrc@mmrcl.com'
+  'safety.mmrc@mmrcl.com',
+  'vinod.nemade@nyatigroup.com'
 ];
 
 // Excluded / Blocked email addresses that should NOT receive automated document upload notifications

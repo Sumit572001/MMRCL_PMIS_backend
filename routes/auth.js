@@ -52,6 +52,7 @@ const AUTHORIZED_REGISTRATION_EMAILS = [
   'pmcsafety30@gmail.com',
   'safety.mmrc@mmrcl.com',
   'sumit.verma@nyatigroup.com',
+  'vinod.nemade@nyatigroup.com',
   'nyatigroup1997@gmail.com',
   'sv0572001@gmail.com',
   'necpl@pmis.com',
@@ -69,7 +70,8 @@ const AUTHORIZED_REGISTRATION_EMAILS = [
   'employer',
   'quality_pmc',
   'safety_pmc',
-  'safety_mmrcl'
+  'safety_mmrcl',
+  'vinod.nemade'
 ];
 
 // @desc    Register or update user
@@ -140,7 +142,8 @@ router.post('/register', async (req, res) => {
     const KNOWN_ACCOUNT_DEFAULTS = {
       'qualitypmc123@gmail.com': { name: 'PMC Quality Team', role: 'Contractor', organization: 'PMC Quality Office' },
       'pmcsafety30@gmail.com': { name: 'PMC Safety Team', role: 'Contractor', organization: 'PMC Safety Office' },
-      'safety.mmrc@mmrcl.com': { name: 'MMRCL Safety Team', role: "Employer's Office", organization: 'MMRCL Safety Office' }
+      'safety.mmrc@mmrcl.com': { name: 'MMRCL Safety Team', role: "Employer's Office", organization: 'MMRCL Safety Office' },
+      'vinod.nemade@nyatigroup.com': { name: 'Vinod Nemade', role: 'Contractor', organization: 'NECPL' }
     };
     if (KNOWN_ACCOUNT_DEFAULTS[cleanEmail]) {
       const def = KNOWN_ACCOUNT_DEFAULTS[cleanEmail];
